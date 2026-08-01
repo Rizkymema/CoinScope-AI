@@ -16,22 +16,20 @@ export const SearchPanel: React.FC = () => {
 
   const selectCoinDirect = useCoinStore(s => s.selectCoinDirect);
 
-  // Debounce logic
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 300);
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Search effect
   useEffect(() => {
     if (!debouncedQuery) {
       setResults([]);
       return;
     }
-    
+
     let active = true;
     setIsSearching(true);
-    
+
     CoinService.searchCoins(debouncedQuery).then(res => {
       if (active) {
         setResults(res);
@@ -49,7 +47,6 @@ export const SearchPanel: React.FC = () => {
     setIsOpen(false);
   };
 
-  // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = () => setIsOpen(false);
     if (isOpen) {
@@ -61,25 +58,24 @@ export const SearchPanel: React.FC = () => {
   return (
     <div className="relative w-full max-w-2xl mx-auto" onClick={e => e.stopPropagation()}>
       <div className="relative flex items-center group">
-        <Search className="absolute left-5 w-5 h-5 text-slate-400 group-focus-within:text-indigo-400 transition-colors" />
+        <Search className="absolute left-5 w-5 h-5 text-slate-400 group-focus-within:text-signal-soft transition-colors" />
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => query && setIsOpen(true)}
           placeholder="Search tokens by name, symbol, or contract address..."
-          className="w-full bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl pl-14 pr-14 py-4 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-lg shadow-black/20 text-sm"
+          className="w-full bg-ink-850/90 border border-white/10 rounded-2xl pl-14 pr-14 py-4 text-white placeholder-slate-500 focus:outline-none focus:border-signal/45 focus:ring-2 focus:ring-signal/15 transition-all shadow-xl shadow-black/25 text-sm"
           id="search-input"
         />
         {isSearching && (
-          <Loader2 className="absolute right-5 w-5 h-5 text-indigo-400 animate-spin" />
+          <Loader2 className="absolute right-5 w-5 h-5 text-signal animate-spin" />
         )}
       </div>
 
-      {/* Autocomplete Dropdown */}
       {isOpen && results.length > 0 && (
-        <div className="absolute top-full mt-2 w-full bg-slate-900/95 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-2xl shadow-black/40 overflow-hidden z-50">
-          <div className="p-2 border-b border-slate-800/50">
+        <div className="absolute top-full mt-2 w-full surface rounded-2xl shadow-2xl shadow-black/40 overflow-hidden z-50">
+          <div className="p-2 border-b border-white/8">
             <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium px-2">
               {results.length} results found
             </span>
@@ -89,7 +85,7 @@ export const SearchPanel: React.FC = () => {
               <li key={coin.id}>
                 <button
                   onClick={() => handleSelect(coin)}
-                  className="w-full text-left px-4 py-3 hover:bg-slate-800/50 flex items-center justify-between transition-all focus:outline-none focus:bg-slate-800/50 group"
+                  className="w-full text-left px-4 py-3 hover:bg-white/5 flex items-center justify-between transition-all focus:outline-none focus:bg-white/5 group"
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <CoinAvatar
@@ -112,7 +108,7 @@ export const SearchPanel: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  
+
                   <div className="text-right flex items-center gap-3 shrink-0">
                     <div>
                       <span className="font-semibold text-white text-sm font-mono block">
@@ -129,7 +125,7 @@ export const SearchPanel: React.FC = () => {
                         {Math.abs(coin.priceChange24h).toFixed(2)}%
                       </span>
                     </div>
-                    <ExternalLink className="w-3.5 h-3.5 text-slate-600 group-hover:text-indigo-400 transition-colors" />
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-600 group-hover:text-signal-soft transition-colors" />
                   </div>
                 </button>
               </li>

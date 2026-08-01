@@ -40,15 +40,15 @@ export const InsightsPanel: React.FC = () => {
         ? "Bullish indicators clustering in the 4H timeframe."
         : "Bearish divergence signaling potential macro consolidation.",
       icon: TrendingUp,
-      color: "text-indigo-400",
-      bg: "bg-indigo-400/10"
+      color: "text-signal-soft",
+      bg: "bg-signal/10"
     }
   ];
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
-      <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-        <h3 className="font-semibold text-white flex items-center gap-2">
+    <div className="surface rounded-2xl overflow-hidden flex flex-col">
+      <div className="px-6 py-4 border-b border-white/8 flex items-center justify-between">
+        <h3 className="font-display font-semibold text-white flex items-center gap-2">
           <Lightbulb className="w-4 h-4 text-emerald-400" />
           Smart Insights
         </h3>

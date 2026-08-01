@@ -46,3 +46,6 @@ Thumbs.db
 # Cache
 .eslintcache
 .stylelintcache
+
+# Local docs/skills bundle (not part of the app)
+/skills/

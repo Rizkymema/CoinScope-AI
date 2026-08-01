@@ -89,10 +89,10 @@ export const AIJudgeChat: React.FC = () => {
       {/* Floating Chat Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`fixed bottom-6 right-6 z-50 p-4 rounded-full shadow-2xl transition-all duration-300 ${
-          isOpen 
-            ? 'bg-slate-800 text-slate-400 hover:text-white scale-90 opacity-0 pointer-events-none' 
-            : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-110'
+        className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl shadow-2xl transition-all duration-300 ${
+          isOpen
+            ? 'bg-ink-800 text-slate-400 hover:text-white scale-90 opacity-0 pointer-events-none'
+            : 'bg-signal text-ink-950 hover:bg-signal-soft hover:scale-105'
         }`}
         aria-label="Open AI Judge Chat"
       >
@@ -103,16 +103,15 @@ export const AIJudgeChat: React.FC = () => {
         </span>
       </button>
 
-      {/* Chat Window */}
-      <div 
-        className={`fixed bottom-6 right-6 z-50 w-[380px] max-w-[calc(100vw-2rem)] flex flex-col h-[600px] max-h-[calc(100vh-6rem)] bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-500/10 transition-all duration-300 origin-bottom-right ${
+      <div
+        className={`fixed bottom-6 right-6 z-50 w-[380px] max-w-[calc(100vw-2rem)] flex flex-col h-[600px] max-h-[calc(100vh-6rem)] surface rounded-2xl overflow-hidden shadow-2xl shadow-black/40 transition-all duration-300 origin-bottom-right ${
           isOpen ? 'scale-100 opacity-100' : 'scale-50 opacity-0 pointer-events-none'
         }`}
       >
-        <div className="p-4 border-b border-slate-700/50 bg-slate-800/50 flex items-center justify-between">
+        <div className="p-4 border-b border-white/8 bg-ink-850/80 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-indigo-500/20 p-2 rounded-xl">
-              <Bot className="w-5 h-5 text-indigo-400" />
+            <div className="bg-signal/15 p-2 rounded-xl">
+              <Bot className="w-5 h-5 text-signal-soft" />
             </div>
             <div>
               <h2 className="font-semibold text-white text-sm">AI Judge Assistant</h2>
@@ -134,8 +133,8 @@ export const AIJudgeChat: React.FC = () => {
         <div className="flex-1 p-4 overflow-y-auto space-y-4 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-4">
-              <div className="bg-slate-800/50 p-4 rounded-full">
-                <Bot className="w-8 h-8 text-indigo-400/50" />
+              <div className="bg-signal/10 p-4 rounded-2xl">
+                <Bot className="w-8 h-8 text-signal/50" />
               </div>
               <div className="text-center">
                 <p className="text-sm text-slate-300 font-medium mb-1">How can I help you?</p>
@@ -145,15 +144,15 @@ export const AIJudgeChat: React.FC = () => {
           ) : (
             messages.map((msg) => (
               <div key={msg.id} className={`flex gap-3 max-w-[85%] ${msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}>
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                  msg.role === 'user' ? 'bg-indigo-600' : 'bg-slate-800 border border-slate-700'
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                  msg.role === 'user' ? 'bg-signal text-ink-950' : 'bg-ink-850 border border-white/10'
                 }`}>
-                  {msg.role === 'user' ? <User className="w-4 h-4 text-white" /> : <Bot className="w-4 h-4 text-indigo-400" />}
+                  {msg.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4 text-signal-soft" />}
                 </div>
                 <div className={`p-3 rounded-2xl text-sm ${
-                  msg.role === 'user' 
-                    ? 'bg-indigo-600 text-white rounded-tr-sm' 
-                    : 'bg-slate-800 text-slate-200 border border-slate-700/50 rounded-tl-sm'
+                  msg.role === 'user'
+                    ? 'bg-signal text-ink-950 rounded-tr-sm'
+                    : 'bg-ink-850 text-slate-200 border border-white/8 rounded-tl-sm'
                 }`}>
                   <p className="leading-relaxed whitespace-pre-wrap">{msg.content}{msg.isStreaming && <span className="animate-pulse ml-1">▋</span>}</p>
                 </div>
@@ -163,7 +162,7 @@ export const AIJudgeChat: React.FC = () => {
           <div ref={bottomRef} />
         </div>
 
-        <div className="p-4 bg-slate-900 border-t border-slate-700/50">
+        <div className="p-4 bg-ink-900 border-t border-white/8">
           <form onSubmit={handleSubmit} className="relative flex items-center gap-2">
             <input
               type="text"
@@ -171,13 +170,13 @@ export const AIJudgeChat: React.FC = () => {
               onChange={(e) => setInput(e.target.value)}
               disabled={isProcessing}
               placeholder="Ask about a coin..."
-              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors disabled:opacity-50"
+              className="flex-1 bg-ink-950 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-signal/50 focus:ring-1 focus:ring-signal/30 transition-colors disabled:opacity-50"
               aria-label="Ask the AI Judge"
             />
             <button
               type="submit"
               disabled={!input.trim() || isProcessing}
-              className="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 transition-colors shrink-0"
+              className="p-3 bg-signal text-ink-950 rounded-xl hover:bg-signal-soft disabled:opacity-50 disabled:hover:bg-signal transition-colors shrink-0"
             >
               {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
             </button>

@@ -83,8 +83,8 @@ export const NewCoinsLiveFeed: React.FC = () => {
     <div className="w-full">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-            <Rocket className="w-6 h-6 text-emerald-400" />
+          <h2 className="font-display text-2xl font-bold text-white flex items-center gap-2">
+            <Rocket className="w-5 h-5 text-amber-400" />
             New Coins Live
           </h2>
           <p className="text-slate-400 text-sm mt-1">
@@ -92,8 +92,7 @@ export const NewCoinsLiveFeed: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Live countdown */}
-          <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700/50 rounded-full px-3 py-1.5">
+          <div className="flex items-center gap-2 bg-ink-850/80 border border-white/8 rounded-xl px-3 py-1.5">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -105,15 +104,14 @@ export const NewCoinsLiveFeed: React.FC = () => {
           <button
             onClick={fetchNewCoins}
             disabled={isRefreshing}
-            className="p-2 hover:bg-slate-800 rounded-xl transition-all border border-slate-700/50 disabled:opacity-50"
+            className="p-2 hover:bg-ink-800 rounded-xl transition-all border border-white/10 disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 text-slate-400 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
 
-      {/* Table Header */}
-      <div className="hidden md:grid grid-cols-[2.5fr_1fr_1fr_1fr_1fr_0.5fr] gap-4 px-4 py-2 text-[10px] text-slate-500 uppercase tracking-wider font-medium border-b border-slate-800/50 mb-1">
+      <div className="hidden md:grid grid-cols-[2.5fr_1fr_1fr_1fr_1fr_0.5fr] gap-4 px-4 py-2 text-[10px] text-slate-500 uppercase tracking-wider font-medium border-b border-white/8 mb-1">
         <span>Token</span>
         <span className="text-right">Price</span>
         <span className="text-right">5m</span>
@@ -122,7 +120,6 @@ export const NewCoinsLiveFeed: React.FC = () => {
         <span className="text-right">Age</span>
       </div>
 
-      {/* Coin rows */}
       <div className="space-y-1">
         {coins.map((coin, index) => {
           const isNew = newIds.has(coin.id);
@@ -130,7 +127,7 @@ export const NewCoinsLiveFeed: React.FC = () => {
             <div
               key={coin.id}
               onClick={() => selectCoinDirect(coin)}
-              className={`group grid grid-cols-1 md:grid-cols-[2.5fr_1fr_1fr_1fr_1fr_0.5fr] gap-2 md:gap-4 items-center px-4 py-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-slate-800/50 border border-transparent hover:border-slate-700/50 ${
+              className={`group grid grid-cols-1 md:grid-cols-[2.5fr_1fr_1fr_1fr_1fr_0.5fr] gap-2 md:gap-4 items-center px-4 py-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-white/[0.03] border border-transparent hover:border-white/10 ${
                 isNew ? 'bg-emerald-500/5 border-emerald-500/20 animate-pulse-once' : ''
               }`}
               style={{ animationDelay: `${index * 30}ms` }}

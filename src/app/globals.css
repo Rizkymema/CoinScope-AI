@@ -4,36 +4,28 @@
 
 @layer base {
   :root {
-    --background: 222.2 84% 4.9%;
+    --background: 220 40% 4%;
     --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
+    --card: 220 32% 8%;
     --card-foreground: 210 40% 98%;
- 
-    --popover: 222.2 84% 4.9%;
+    --popover: 220 32% 8%;
     --popover-foreground: 210 40% 98%;
- 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
- 
-    --secondary: 217.2 32.6% 17.5%;
+    --primary: 173 80% 40%;
+    --primary-foreground: 220 40% 4%;
+    --secondary: 217 28% 14%;
     --secondary-foreground: 210 40% 98%;
- 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
- 
-    --accent: 217.2 32.6% 17.5%;
+    --muted: 217 28% 14%;
+    --muted-foreground: 215 16% 62%;
+    --accent: 217 28% 14%;
     --accent-foreground: 210 40% 98%;
- 
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --border: 217 24% 18%;
+    --input: 217 24% 18%;
+    --ring: 173 80% 40%;
   }
 }
- 
+
 @layer base {
   * {
     @apply border-border;
@@ -44,7 +36,30 @@
 }
 
 /* ============================================
-   LIVE MARKET TICKER - INFINITE SCROLL
+   ATMOSPHERE
+   ============================================ */
+.gradient-mesh {
+  background-color: #070b12;
+  background-image:
+    radial-gradient(ellipse 80% 55% at 12% -10%, rgba(20, 184, 166, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 45% at 90% 8%, rgba(245, 158, 11, 0.08), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 50% 100%, rgba(14, 165, 233, 0.06), transparent 55%),
+    linear-gradient(180deg, #070b12 0%, #0a1018 45%, #070b12 100%);
+}
+
+.surface {
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(12, 18, 28, 0.88));
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.surface-hover:hover {
+  border-color: rgba(45, 212, 191, 0.35);
+  box-shadow: 0 12px 40px -20px rgba(20, 184, 166, 0.35);
+}
+
+/* ============================================
+   LIVE MARKET TICKER
    ============================================ */
 .ticker-wrapper {
   overflow: hidden;
@@ -62,16 +77,12 @@
 }
 
 @keyframes ticker-scroll {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
 }
 
 /* ============================================
-   SCROLLBAR STYLES
+   SCROLLBAR
    ============================================ */
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
@@ -82,7 +93,6 @@
   scrollbar-width: none;
 }
 
-/* Custom thin scrollbar for chat */
 .overflow-y-auto::-webkit-scrollbar {
   width: 4px;
 }
@@ -92,37 +102,21 @@
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(20, 184, 166, 0.25);
   border-radius: 100px;
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: rgba(99, 102, 241, 0.4);
+  background: rgba(20, 184, 166, 0.45);
 }
 
 /* ============================================
-   CARD GLOW EFFECTS
-   ============================================ */
-@keyframes glow-pulse {
-  0%, 100% {
-    box-shadow: 0 0 5px rgba(99, 102, 241, 0.1);
-  }
-  50% {
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.15), 0 0 40px rgba(99, 102, 241, 0.05);
-  }
-}
-
-/* ============================================
-   NEW COIN HIGHLIGHT ANIMATION
+   MOTION
    ============================================ */
 @keyframes pulse-once {
   0% {
-    background-color: rgba(16, 185, 129, 0.1);
-    border-color: rgba(16, 185, 129, 0.3);
-  }
-  50% {
-    background-color: rgba(16, 185, 129, 0.05);
-    border-color: rgba(16, 185, 129, 0.15);
+    background-color: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.28);
   }
   100% {
     background-color: transparent;
@@ -134,9 +128,6 @@
   animation: pulse-once 3s ease-out forwards;
 }
 
-/* ============================================
-   PRICE FLASH ANIMATION
-   ============================================ */
 @keyframes flash-green {
   0% { color: #34d399; background-color: rgba(16, 185, 129, 0.15); }
   100% { color: inherit; background-color: transparent; }
@@ -147,17 +138,9 @@
   100% { color: inherit; background-color: transparent; }
 }
 
-.price-up {
-  animation: flash-green 1.5s ease-out;
-}
+.price-up { animation: flash-green 1.5s ease-out; }
+.price-down { animation: flash-red 1.5s ease-out; }
 
-.price-down {
-  animation: flash-red 1.5s ease-out;
-}
-
-/* ============================================
-   GRID CARD ENTRANCE ANIMATION
-   ============================================ */
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -173,34 +156,40 @@
   animation: fadeInUp 0.4s ease-out backwards;
 }
 
-/* ============================================
-   BACKGROUND GRADIENT MESH
-   ============================================ */
-.gradient-mesh {
-  background:
-    radial-gradient(at 20% 80%, rgba(99, 102, 241, 0.06) 0px, transparent 50%),
-    radial-gradient(at 80% 20%, rgba(139, 92, 246, 0.04) 0px, transparent 50%),
-    radial-gradient(at 40% 40%, rgba(16, 185, 129, 0.03) 0px, transparent 50%);
+@keyframes brand-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-/* ============================================
-   SELECTION & FOCUS STYLES
-   ============================================ */
+.animate-brand-in {
+  animation: brand-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes line-draw {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+.animate-line-draw {
+  transform-origin: left;
+  animation: line-draw 0.9s ease-out 0.25s both;
+}
+
 ::selection {
-  background-color: rgba(99, 102, 241, 0.3);
+  background-color: rgba(20, 184, 166, 0.35);
   color: white;
 }
 
-/* ============================================
-   FONT MONO FOR PRICES
-   ============================================ */
 .font-mono {
   font-feature-settings: 'tnum' on, 'lnum' on;
 }
 
-/* ============================================
-   RESPONSIVE TICKER
-   ============================================ */
 @media (max-width: 640px) {
   .ticker-content {
     animation-duration: 25s;

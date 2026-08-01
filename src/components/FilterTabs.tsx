@@ -32,10 +32,10 @@ export const FilterTabs: React.FC<FilterTabsProps> = ({ onFilterChange, activeFi
             <button
               key={filter.id}
               onClick={() => onFilterChange(filter.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-full font-medium text-sm whitespace-nowrap transition-all duration-200 ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl font-medium text-sm whitespace-nowrap transition-all duration-200 ${
                 activeFilter === filter.id
-                  ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-500/30'
-                  : 'bg-slate-800/50 text-slate-300 hover:bg-slate-800 border border-slate-700/50'
+                  ? 'bg-signal/15 text-signal-soft border border-signal/35'
+                  : 'bg-ink-850/70 text-slate-400 hover:text-white border border-white/8 hover:border-white/15'
               }`}
             >
               {filter.icon}
@@ -43,32 +43,32 @@ export const FilterTabs: React.FC<FilterTabsProps> = ({ onFilterChange, activeFi
             </button>
           ))}
         </div>
-        
+
         <div className="relative z-50 flex-shrink-0 pb-2">
-          <button 
+          <button
             onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-            className="p-2.5 hover:bg-slate-800 rounded-lg transition-colors border border-slate-700"
+            className="p-2.5 hover:bg-ink-800 rounded-xl transition-colors border border-white/10"
           >
             <Settings className="w-5 h-5 text-slate-400" />
           </button>
 
           {isSettingsOpen && (
-            <div className="absolute right-0 top-full mt-1 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-[100] overflow-hidden">
-              <div className="p-3 border-b border-slate-700/50 bg-slate-800/50">
+            <div className="absolute right-0 top-full mt-1 w-56 surface rounded-xl shadow-xl z-[100] overflow-hidden">
+              <div className="p-3 border-b border-white/8">
                 <h3 className="text-sm font-semibold text-white">Filter Settings</h3>
               </div>
               <div className="p-2 flex flex-col gap-1">
-                <label className="flex items-center justify-between p-2 hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors">
+                <label className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
                   <span className="text-sm text-slate-300">Auto-refresh</span>
-                  <input type="checkbox" className="rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-indigo-500" defaultChecked />
+                  <input type="checkbox" className="rounded bg-ink-900 border-slate-700 text-signal focus:ring-signal" defaultChecked />
                 </label>
-                <label className="flex items-center justify-between p-2 hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors">
+                <label className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
                   <span className="text-sm text-slate-300">Show exact numbers</span>
-                  <input type="checkbox" className="rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-indigo-500" />
+                  <input type="checkbox" className="rounded bg-ink-900 border-slate-700 text-signal focus:ring-signal" />
                 </label>
-                <label className="flex items-center justify-between p-2 hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors">
+                <label className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
                   <span className="text-sm text-slate-300">High contrast</span>
-                  <input type="checkbox" className="rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-indigo-500" />
+                  <input type="checkbox" className="rounded bg-ink-900 border-slate-700 text-signal focus:ring-signal" />
                 </label>
               </div>
             </div>

@@ -11,7 +11,7 @@ export const LiveMarketTicker: React.FC = () => {
 
   useEffect(() => {
     const fetchTicker = async () => {
-      const data = await CoinService.getTopCoins();
+      const data = await CoinService.getTopCoins({ limit: 24 });
       setCoins(data);
     };
     fetchTicker();
@@ -21,17 +21,16 @@ export const LiveMarketTicker: React.FC = () => {
 
   if (coins.length === 0) return null;
 
-  // Double the coins array for seamless infinite scroll
   const tickerCoins = [...coins, ...coins];
 
   return (
-    <div className="w-full bg-slate-900/50 border-b border-slate-800/30 overflow-hidden">
+    <div className="w-full bg-ink-900/70 border-b border-white/5 overflow-hidden">
       <div className="ticker-wrapper">
         <div className="ticker-content">
           {tickerCoins.map((coin, idx) => (
             <div
               key={`${coin.id}-${idx}`}
-              className="inline-flex items-center gap-2 px-4 py-2 shrink-0"
+              className="inline-flex items-center gap-2 px-4 py-2.5 shrink-0"
             >
               <CoinAvatar
                 imageUrl={coin.imageUrl}
@@ -53,7 +52,7 @@ export const LiveMarketTicker: React.FC = () => {
                 )}
                 {Math.abs(coin.priceChange24h).toFixed(1)}%
               </span>
-              <span className="text-slate-800 ml-2">|</span>
+              <span className="text-slate-800 ml-2">·</span>
             </div>
           ))}
         </div>
