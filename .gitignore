@@ -11,9 +11,7 @@
 /out
 /.next
 
-# Misc
-.DS_Store
-*.pem
+# Environment
 .env
 .env.local
 .env.development.local
@@ -26,20 +24,14 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
-# Editor directories and files
-.idea
-.vscode
+# Editor / OS
+.idea/
+.vscode/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-# IDE
-.vscode/
-.idea/
-
-# OS
 .DS_Store
 Thumbs.db
 

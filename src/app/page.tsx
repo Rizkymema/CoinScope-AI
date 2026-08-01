@@ -6,13 +6,12 @@ import { InsightsPanel } from '@/components/InsightsPanel';
 import { AIJudgeChat } from '@/components/AIJudgeChat';
 import { TrendingCoinsGrid } from '@/components/TrendingCoinsGrid';
 import { FeaturedCoinsCarousel } from '@/components/FeaturedCoinsCarousel';
-import { FilterTabs } from '@/components/FilterTabs';
+import { FilterTabs, FilterType } from '@/components/FilterTabs';
 import { NewCoinsLiveFeed } from '@/components/NewCoinsLiveFeed';
 import { LiveMarketTicker } from '@/components/LiveMarketTicker';
 import { useCoinStore } from '@/store/useCoinStore';
 import { Activity, Loader2, Zap, Globe } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { FilterType } from '@/components/FilterTabs';
 
 export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState<FilterType>('trending');

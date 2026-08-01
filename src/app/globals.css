@@ -128,19 +128,6 @@
   animation: pulse-once 3s ease-out forwards;
 }
 
-@keyframes flash-green {
-  0% { color: #34d399; background-color: rgba(16, 185, 129, 0.15); }
-  100% { color: inherit; background-color: transparent; }
-}
-
-@keyframes flash-red {
-  0% { color: #f87171; background-color: rgba(239, 68, 68, 0.15); }
-  100% { color: inherit; background-color: transparent; }
-}
-
-.price-up { animation: flash-green 1.5s ease-out; }
-.price-down { animation: flash-red 1.5s ease-out; }
-
 @keyframes fadeInUp {
   from {
     opacity: 0;

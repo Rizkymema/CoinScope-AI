@@ -196,22 +196,6 @@ export const CoinService = {
     }
   },
 
-  async getCoinBySymbol(symbolOrAddress: string): Promise<CoinData | null> {
-    try {
-      const response = await fetch(`${DEXSCREENER_API}/latest/dex/search?q=${encodeURIComponent(symbolOrAddress)}`);
-      const data = await response.json();
-      if (!data || !Array.isArray(data.pairs) || data.pairs.length === 0) return null;
-
-      const bestPair = data.pairs.reduce((prev: any, current: any) => {
-        return ((prev?.liquidity?.usd || 0) > (current?.liquidity?.usd || 0)) ? prev : current;
-      });
-
-      return mapPairToCoinData(bestPair);
-    } catch (error) {
-      return null;
-    }
-  },
-
   async getTopCoins(options?: { limit?: number }): Promise<CoinData[]> {
     const limit = Math.max(1, Number(options?.limit ?? 80));
     const now = Date.now();

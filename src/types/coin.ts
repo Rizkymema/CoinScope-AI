@@ -37,8 +37,6 @@ export interface CoinData {
   priceChange1h?: number;
   priceChange6h?: number;
   fundamentals: CoinFundamental;
-  aiAnalysis?: CoinAnalysis;
-  // New fields for images and metadata
   imageUrl?: string;
   headerUrl?: string;
   chainId?: string;

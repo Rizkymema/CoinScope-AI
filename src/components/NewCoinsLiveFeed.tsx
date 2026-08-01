@@ -5,7 +5,7 @@ import { CoinData } from '@/types/coin';
 import { CoinService } from '@/services/coin.service';
 import { useCoinStore } from '@/store/useCoinStore';
 import { CoinAvatar, ChainBadge, formatPrice, formatNumber, timeAgo } from './CoinAvatar';
-import { Zap, TrendingUp, TrendingDown, Clock, ExternalLink, RefreshCw, Rocket } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Clock, RefreshCw, Rocket } from 'lucide-react';
 
 export const NewCoinsLiveFeed: React.FC = () => {
   const [coins, setCoins] = useState<CoinData[]>([]);
