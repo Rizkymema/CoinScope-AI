@@ -47,4 +47,20 @@ export interface CoinData {
   txns24h?: { buys: number; sells: number };
   websites?: { label: string; url: string }[];
   socials?: { type: string; url: string }[];
+  isPumpFun?: boolean;
+  bondingCurve?: number;
+  pumpFunUrl?: string;
+  /** Solana mint / token contract address (base token). */
+  mint?: string;
+  /** Where this coin record came from. */
+  source?: 'pumpportal' | 'pumpfun' | 'dexscreener' | 'gecko';
+  /** Price denominated in SOL (Pump.fun bonding-curve tokens). */
+  priceSol?: number;
+  /** Metaplex metadata URI (Pump.fun tokens) - used to lazily resolve the image. */
+  metadataUri?: string;
+  /** Pool / launchpad type reported by the stream (pump, pump-amm, raydium, bonk, ...). */
+  poolType?: string;
+  description?: string;
+  /** True when the token has migrated off the bonding curve. */
+  graduated?: boolean;
 }

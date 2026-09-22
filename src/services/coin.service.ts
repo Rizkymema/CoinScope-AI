@@ -1,6 +1,22 @@
 import { CoinData } from '../types/coin';
+import { PumpFunService } from './pumpfun.service';
 
 const DEXSCREENER_API = 'https://api.dexscreener.com';
+const GECKOTERMINAL_API = 'https://api.geckoterminal.com/api/v2';
+const GECKO_HEADERS = { Accept: 'application/json;version=20230302' };
+const GECKO_NETWORK_TO_CHAIN: Record<string, string> = {
+  solana: 'solana',
+  eth: 'ethereum',
+  base: 'base',
+  bsc: 'bsc',
+  arbitrum: 'arbitrum',
+  polygon_pos: 'polygon',
+  avax: 'avalanche',
+  optimism: 'optimism',
+};
+const NEW_COINS_CACHE_TTL_MS = 8_000;
+let geckoCache: { ts: number; data: CoinData[] } | null = null;
+let geckoInFlight: Promise<CoinData[]> | null = null;
 
 type TokenMeta = {
   chainId: string;
@@ -170,6 +186,59 @@ function mapPairToCoinData(pair: any): CoinData {
     txns24h: pair.txns?.h24 ? { buys: Number(pair.txns.h24.buys) || 0, sells: Number(pair.txns.h24.sells) || 0 } : undefined,
     websites: Array.isArray(pair.info?.websites) ? pair.info.websites : [],
     socials: Array.isArray(pair.info?.socials) ? pair.info.socials : [],
+    mint: baseAddress || undefined,
+    source: 'dexscreener',
+    isPumpFun: chainId === 'solana' && (String(pair.dexId || '').startsWith('pump') || baseAddress.endsWith('pump')),
+    graduated: chainId === 'solana' && baseAddress.endsWith('pump') ? true : undefined,
+    poolType: String(pair.dexId || '') || undefined,
+    pumpFunUrl: chainId === 'solana' && baseAddress.endsWith('pump') ? `https://pump.fun/coin/${baseAddress}` : undefined,
+  };
+}
+
+/** Maps a GeckoTerminal pool resource (new_pools endpoint) into CoinData. */
+function mapGeckoPoolToCoinData(pool: any): CoinData | null {
+  const attrs = pool?.attributes;
+  if (!attrs) return null;
+  const baseTokenId: string = pool?.relationships?.base_token?.data?.id || '';
+  const networkId: string = pool?.relationships?.network?.data?.id || baseTokenId.split('_')[0] || '';
+  const chainId = GECKO_NETWORK_TO_CHAIN[networkId] || normalizeChainId(networkId);
+  const baseAddress = normalizeTokenAddress(baseTokenId.slice(baseTokenId.indexOf('_') + 1));
+  if (!chainId || !baseAddress) return null;
+
+  const [baseName] = String(attrs.name || '').split(' / ');
+  const priceUsd = Number(attrs.base_token_price_usd) || 0;
+  const change = attrs.price_change_percentage || {};
+  const tx24 = attrs.transactions?.h24;
+  const dexId = String(pool?.relationships?.dex?.data?.id || '');
+  const isPump = chainId === 'solana' && (dexId.startsWith('pump') || baseAddress.endsWith('pump'));
+
+  return {
+    id: `${chainId}:${baseAddress}`,
+    mint: baseAddress,
+    name: baseName || 'Unknown',
+    symbol: (baseName || '?').toUpperCase().slice(0, 12),
+    priceUsd,
+    priceChange24h: Number(change.h24) || 0,
+    priceChange5m: Number(change.m5) || 0,
+    priceChange1h: Number(change.h1) || 0,
+    priceChange6h: Number(change.h6) || 0,
+    fundamentals: {
+      marketCap: Number(attrs.market_cap_usd || attrs.fdv_usd || 0),
+      circulatingSupply: 0,
+      volume24h: Number(attrs.volume_usd?.h24 || 0),
+      tvl: Number(attrs.reserve_in_usd || 0),
+    },
+    chainId,
+    dexId,
+    pairAddress: String(attrs.address || ''),
+    url: `https://dexscreener.com/${chainId}/${baseAddress}`,
+    createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : undefined,
+    txns24h: tx24 ? { buys: Number(tx24.buys) || 0, sells: Number(tx24.sells) || 0 } : undefined,
+    source: 'gecko',
+    isPumpFun: isPump,
+    graduated: isPump ? true : undefined,
+    poolType: dexId || undefined,
+    pumpFunUrl: isPump ? `https://pump.fun/coin/${baseAddress}` : undefined,
   };
 }
 
@@ -309,38 +378,139 @@ export const CoinService = {
     }
   },
 
-  async getLatestProfiles(): Promise<CoinData[]> {
+  /**
+   * Newest pools across chains from GeckoTerminal (public API, CORS enabled).
+   * This is the widest "just launched" source for non-Pump.fun DEX listings.
+   */
+  async getGeckoNewPools(): Promise<CoinData[]> {
+    const now = Date.now();
+    if (geckoCache && now - geckoCache.ts < NEW_COINS_CACHE_TTL_MS) return geckoCache.data;
+    if (geckoInFlight) return geckoInFlight;
+
+    geckoInFlight = (async () => {
+      try {
+        const [allRes, solRes] = await Promise.allSettled([
+          fetch(`${GECKOTERMINAL_API}/networks/new_pools?page=1`, { headers: GECKO_HEADERS }).then((r) => (r.ok ? r.json() : null)),
+          fetch(`${GECKOTERMINAL_API}/networks/solana/new_pools?page=1`, { headers: GECKO_HEADERS }).then((r) => (r.ok ? r.json() : null)),
+        ]);
+        const pools: any[] = [];
+        [allRes, solRes].forEach((r) => {
+          if (r.status === 'fulfilled' && Array.isArray(r.value?.data)) pools.push(...r.value.data);
+        });
+        const seen = new Set<string>();
+        const coins: CoinData[] = [];
+        pools.forEach((p) => {
+          const c = mapGeckoPoolToCoinData(p);
+          if (!c || seen.has(c.id)) return;
+          seen.add(c.id);
+          coins.push(c);
+        });
+        geckoCache = { ts: Date.now(), data: coins };
+        return coins;
+      } catch {
+        return geckoCache?.data || [];
+      } finally {
+        geckoInFlight = null;
+      }
+    })();
+
+    return geckoInFlight;
+  },
+
+  /** DexScreener "latest token profiles" resolved to their best trading pair. */
+  async getLatestDexProfiles(): Promise<CoinData[]> {
     try {
-      const response = await fetch(`${DEXSCREENER_API}/token-profiles/latest/v1`);
-      const data = await response.json();
-      if (!Array.isArray(data) || data.length === 0) return [];
-
+      const dexProfilesData = await fetch(`${DEXSCREENER_API}/token-profiles/latest/v1`).then((r) => (r.ok ? r.json() : []));
       const uniqueTokens = new Map<string, TokenMeta>();
-      data.forEach((item: any) => {
-        if (!item?.chainId || !item?.tokenAddress) return;
-        const key = tokenKey(item.chainId, item.tokenAddress);
-        if (!uniqueTokens.has(key)) {
-          uniqueTokens.set(key, {
-            chainId: item.chainId,
-            tokenAddress: item.tokenAddress,
-            icon: item.icon,
-            header: item.header,
-            description: item.description,
-            links: item.links,
-          });
-        }
-      });
-
-      // Keep this bounded: the UI only shows a small window of newest coins
-      // and this method is polled frequently by the live feed.
-      const tokenEntries = Array.from(uniqueTokens.values()).slice(0, 60);
+      if (Array.isArray(dexProfilesData)) {
+        dexProfilesData.forEach((item: any) => {
+          if (!item?.chainId || !item?.tokenAddress) return;
+          const key = tokenKey(item.chainId, item.tokenAddress);
+          if (!uniqueTokens.has(key)) {
+            uniqueTokens.set(key, {
+              chainId: item.chainId,
+              tokenAddress: item.tokenAddress,
+              icon: item.icon,
+              header: item.header,
+              description: item.description,
+              links: item.links,
+            });
+          }
+        });
+      }
+      const tokenEntries = Array.from(uniqueTokens.values()).slice(0, 45);
       const pairs = await fetchBestPairsForTokens(tokenEntries);
-      return pairs
-        .map(mapPairToCoinData)
-        .filter(Boolean)
-        .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-    } catch (error) {
+      return pairs.map(mapPairToCoinData).filter(Boolean);
+    } catch {
       return [];
     }
-  }
+  },
+
+  /**
+   * Combined "very new coins" feed: Pump.fun launches + GeckoTerminal new pools + DexScreener profiles,
+   * de-duplicated and sorted newest first.
+   */
+  async getNewCoins(options?: { maxAgeMinutes?: number }): Promise<CoinData[]> {
+    const [pumpRes, geckoRes, dexRes] = await Promise.allSettled([
+      PumpFunService.getLatestPumpFunCoins(30),
+      CoinService.getGeckoNewPools(),
+      CoinService.getLatestDexProfiles(),
+    ]);
+
+    const merged = new Map<string, CoinData>();
+    const push = (list: CoinData[]) => {
+      list.forEach((c) => {
+        if (!c?.id) return;
+        const prev = merged.get(c.id);
+        if (!prev) {
+          merged.set(c.id, c);
+          return;
+        }
+        const earliest = [prev.createdAt, c.createdAt].filter((t): t is number => !!t);
+        merged.set(c.id, {
+          ...prev,
+          ...c,
+          imageUrl: prev.imageUrl || c.imageUrl,
+          createdAt: earliest.length ? Math.min(...earliest) : undefined,
+          fundamentals: {
+            marketCap: c.fundamentals.marketCap || prev.fundamentals.marketCap,
+            circulatingSupply: c.fundamentals.circulatingSupply || prev.fundamentals.circulatingSupply,
+            volume24h: c.fundamentals.volume24h || prev.fundamentals.volume24h,
+            tvl: c.fundamentals.tvl || prev.fundamentals.tvl,
+          },
+        });
+      });
+    };
+
+    push(pumpRes.status === 'fulfilled' ? pumpRes.value : []);
+    push(geckoRes.status === 'fulfilled' ? geckoRes.value : []);
+    push(dexRes.status === 'fulfilled' ? dexRes.value : []);
+
+    const maxAgeMs = options?.maxAgeMinutes ? options.maxAgeMinutes * 60_000 : 0;
+    const now = Date.now();
+
+    return Array.from(merged.values())
+      .filter((c) => !maxAgeMs || !c.createdAt || now - c.createdAt <= maxAgeMs)
+      .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+  },
+
+  /** Backwards-compatible alias. */
+  async getLatestProfiles(): Promise<CoinData[]> {
+    return CoinService.getNewCoins();
+  },
+
+  /**
+   * Latest DexScreener quotes for specific tokens (used to mark open positions to market).
+   * Returns a map keyed by `chain:address`.
+   */
+  async getTokenQuotes(tokens: { chainId: string; address: string }[]): Promise<Map<string, CoinData>> {
+    const out = new Map<string, CoinData>();
+    if (tokens.length === 0) return out;
+    const pairs = await fetchBestPairsForTokens(tokens.map((t) => ({ chainId: t.chainId, tokenAddress: t.address })));
+    pairs.forEach((pair) => {
+      const coin = mapPairToCoinData(pair);
+      if (coin) out.set(coin.id, coin);
+    });
+    return out;
+  },
 };

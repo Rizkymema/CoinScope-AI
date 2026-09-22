@@ -1,112 +1,89 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { CoinAnalysis, CoinData } from '../types/coin';
+import { AiDecision, BotSettings, BotStats } from '../types/bot';
+
+export type ChatMessageParam = Anthropic.MessageParam;
+export type ChatContentBlock = Anthropic.ContentBlock;
+export type ChatToolUseBlock = Anthropic.ToolUseBlock;
+export type ChatToolResultParam = Anthropic.ToolResultBlockParam;
+
+export interface ChatTurnResult {
+  content: ChatContentBlock[];
+  stop_reason: string | null;
+  error?: string;
+  model?: string;
+}
+
+async function postJson<T>(url: string, body: unknown, timeoutMs = 30_000): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `${url} failed (${res.status})`);
+    return data as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export const AIService = {
-  /**
-   * Placeholder analysis until a real AI backend is wired up.
-   * Always returns mock scoring for the selected symbol.
-   */
-  async analyzeCoin(symbol: string): Promise<CoinAnalysis> {
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-
-    return {
-      symbol: symbol.toUpperCase(),
-      score: 78,
-      category: 'Watchlist',
-      analysis: 'Strong volume but high whale concentration across active derivatives.',
-      risk_protocol: {
-        flags: ['Low liquidity', 'Whale dominance'],
-        level: 'High',
-      },
-      breakdown: {
-        fundamental: 65,
-        technical: 82,
-        sentiment: 75,
-        risk: 90,
-      },
-      generated_at: new Date().toISOString(),
-    };
+  /** Full scorecard for a coin. Uses Claude when the server has credentials, heuristics otherwise. */
+  async analyzeCoin(coin: CoinData): Promise<CoinAnalysis & { source?: 'ai' | 'heuristic'; note?: string }> {
+    const data = await postJson<{ analysis: CoinAnalysis; source?: 'ai' | 'heuristic'; note?: string }>('/api/ai/analyze', { coin }, 45_000);
+    return { ...data.analysis, source: data.source, note: data.note };
   },
 
-  /**
-   * Rule-based chat reply using selected coin context.
-   * Simulates streaming until a real LLM endpoint is connected.
-   */
-  async judgeCoin(
-    prompt: string,
-    onChunk: (text: string) => void,
-    context?: { coin?: CoinData | null; aiAnalysis?: CoinAnalysis | null }
-  ): Promise<void> {
-    const coin = context?.coin || null;
-    const ai = context?.aiAnalysis || null;
+  /** Buy / skip decision used by the bot's AI gate. */
+  async decideSnipe(
+    coin: CoinData,
+    settings: BotSettings,
+    context: { openPositions: number; stats: BotStats }
+  ): Promise<AiDecision> {
+    try {
+      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context }, 25_000);
+      if (data?.note && data.decision) data.decision.reason = `${data.decision.reason} (${data.note})`;
+      return data.decision;
+    } catch (err: any) {
+      return {
+        action: 'skip',
+        confidence: 0,
+        reason: `AI gate unavailable: ${err?.message || 'network error'}`,
+        source: 'heuristic',
+      };
+    }
+  },
 
-    const formatUsd = (value: number) => {
-      const safe = Number.isFinite(value) ? value : 0;
-      const maxFractionDigits = safe !== 0 && Math.abs(safe) < 1 ? 6 : 2;
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        maximumFractionDigits: maxFractionDigits,
-      }).format(safe);
-    };
+  /** One model turn of the control chat. The caller executes any tool_use blocks and calls again. */
+  async chatTurn(messages: ChatMessageParam[], snapshot: unknown): Promise<ChatTurnResult> {
+    try {
+      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, snapshot }, 90_000);
+      return data;
+    } catch (err: any) {
+      return { content: [], stop_reason: null, error: err?.message || 'AI chat failed' };
+    }
+  },
 
-    const formatCompact = (value: number) => {
-      const safe = Number.isFinite(value) ? value : 0;
-      return new Intl.NumberFormat('en-US', {
-        notation: 'compact',
-        maximumFractionDigits: 2,
-      }).format(safe);
-    };
-
-    const buildReply = () => {
-      if (!coin) {
-        return `Based on the latest data for your query "${prompt}", the technicals suggest a short-term volatility spike. However, fundamental adoption remains strong. I'd rate the conviction as moderate risk. Wait for support levels before considering positions.`;
-      }
-
-      const change24h = Number(coin.priceChange24h) || 0;
-      const changePrefix = change24h >= 0 ? '+' : '';
-      const mcap = Number(coin.fundamentals?.marketCap) || 0;
-      const vol24h = Number(coin.fundamentals?.volume24h) || 0;
-      const liquidity = Number(coin.fundamentals?.tvl) || 0;
-      const buys = coin.txns24h?.buys;
-      const sells = coin.txns24h?.sells;
-      const txLine =
-        buys !== undefined && sells !== undefined
-          ? `Txns 24h: ${buys} buys / ${sells} sells`
-          : 'Txns 24h: not available';
-      const aiLine = ai
-        ? `AI Score: ${ai.score}/100 (${ai.category}) | Risk: ${ai.risk_protocol.level}${ai.risk_protocol.flags?.length ? ` | Flags: ${ai.risk_protocol.flags.join(', ')}` : ''}`
-        : 'AI Score: not available';
-
-      return [
-        `Analisis cepat untuk ${coin.name} (${coin.symbol})${coin.chainId ? ` — chain ${coin.chainId}` : ''}.`,
-        '',
-        `Harga: ${formatUsd(Number(coin.priceUsd) || 0)} (24h ${changePrefix}${change24h.toFixed(2)}%)`,
-        `MCap: ${formatCompact(mcap)} | Vol 24h: ${formatCompact(vol24h)} | Liquidity: ${formatCompact(liquidity)}`,
-        txLine,
-        coin.url ? `DexScreener: ${coin.url}` : '',
-        '',
-        aiLine,
-        '',
-        `Pertanyaan Anda: "${prompt}"`,
-        'Sebut timeframe (5m/1h/4h/1D) + gaya risk (rendah/sedang/tinggi) kalau mau analisis entry/exit lebih spesifik.',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    };
-
-    const reply = buildReply();
-    let index = 0;
-
-    return new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (index >= reply.length) {
-          clearInterval(interval);
-          resolve();
-          return;
-        }
-        onChunk(reply.slice(index, index + 3));
-        index += 3;
-      }, 30);
-    });
+  /** Local fallback answer when the AI backend is not configured. */
+  localReply(prompt: string, coin?: CoinData | null, analysis?: CoinAnalysis | null): string {
+    if (!coin) {
+      return `AI backend belum dikonfigurasi (tambahkan ANTHROPIC_API_KEY di .env.local untuk mengaktifkan chat & kontrol bot via AI).\n\nPertanyaan Anda: "${prompt}". Pilih coin di dashboard untuk melihat data pasar dan skor heuristiknya.`;
+    }
+    const fmt = (v: number) => (v >= 1_000_000 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1_000 ? `$${(v / 1e3).toFixed(1)}K` : `$${v.toFixed(2)}`);
+    return [
+      `Ringkasan ${coin.name} (${coin.symbol}) di ${coin.chainId || 'DEX'}:`,
+      `Harga $${coin.priceUsd} | 24h ${coin.priceChange24h >= 0 ? '+' : ''}${coin.priceChange24h.toFixed(1)}%`,
+      `MCap ${fmt(coin.fundamentals.marketCap)} | Likuiditas ${fmt(coin.fundamentals.tvl || 0)} | Vol 24h ${fmt(coin.fundamentals.volume24h)}`,
+      analysis ? `Skor: ${analysis.score}/100 (${analysis.category}, risiko ${analysis.risk_protocol.level})` : '',
+      '',
+      'AI backend belum aktif - set ANTHROPIC_API_KEY untuk analisis dan kontrol bot dengan Claude.',
+    ]
+      .filter(Boolean)
+      .join('\n');
   },
 };

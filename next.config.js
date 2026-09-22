@@ -1,7 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
+  poweredByHeader: false,
+  experimental: {
+    // The MCP server packages ship ESM/CJS dual builds with runtime provider selection;
+    // keep them external so Node loads them directly instead of webpack bundling them.
+    serverComponentsExternalPackages: ['mcp-handler', '@modelcontextprotocol/server', '@modelcontextprotocol/core'],
+  },
   images: {
     unoptimized: true,
     remotePatterns: [

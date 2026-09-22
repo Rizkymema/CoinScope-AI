@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { CoinData } from '@/types/coin';
 import { CoinService } from '@/services/coin.service';
 import { useCoinStore } from '@/store/useCoinStore';
+import { useBotStore } from '@/store/useBotStore';
 import { CoinAvatar, ChainBadge, formatNumber, formatPrice } from './CoinAvatar';
 import { TrendingUp, TrendingDown, Volume2, Zap, Flame, Clock, BarChart3, Target, History, ExternalLink, Users } from 'lucide-react';
 import { FilterType } from './FilterTabs';
@@ -12,10 +13,11 @@ interface TrendingCoinsGridProps {
   activeFilter?: FilterType;
 }
 
-export const TrendingCoinsGrid: React.FC<TrendingCoinsGridProps> = ({ activeFilter = 'trending' }) => {
+const TrendingCoinsGridComponent: React.FC<TrendingCoinsGridProps> = ({ activeFilter = 'trending' }) => {
   const [coins, setCoins] = useState<CoinData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const selectCoinDirect = useCoinStore(s => s.selectCoinDirect);
+  const manualSnipeCoin = useBotStore(s => s.manualSnipeCoin);
 
   useEffect(() => {
     let mounted = true;
@@ -228,10 +230,23 @@ export const TrendingCoinsGrid: React.FC<TrendingCoinsGridProps> = ({ activeFilt
                   </div>
                 )}
 
-                <button className="w-full bg-signal hover:bg-signal-soft text-ink-950 font-semibold py-2.5 rounded-xl transition-all duration-200 text-sm flex items-center justify-center gap-2">
-                  <Target className="w-3.5 h-3.5" />
-                  Analyze
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="bg-signal hover:bg-signal-soft text-ink-950 font-bold py-2.5 rounded-xl transition-all duration-200 text-xs flex items-center justify-center gap-1.5">
+                    <Target className="w-3.5 h-3.5" />
+                    Analyze
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      manualSnipeCoin(coin);
+                    }}
+                    className="bg-amber-400/15 hover:bg-amber-400/25 text-amber-400 border border-amber-400/30 hover:border-amber-400/50 font-extrabold py-2.5 rounded-xl transition-all duration-200 text-xs flex items-center justify-center gap-1.5 active:scale-95"
+                    title={`Buy $${coin.symbol} with Bot`}
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    Snipe Bot
+                  </button>
+                </div>
 
                 {coin.url && (
                   <a
@@ -253,3 +268,5 @@ export const TrendingCoinsGrid: React.FC<TrendingCoinsGridProps> = ({ activeFilt
     </div>
   );
 };
+
+export const TrendingCoinsGrid = React.memo(TrendingCoinsGridComponent);

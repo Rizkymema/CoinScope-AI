@@ -41,3 +41,7 @@ Thumbs.db
 
 # Local docs/skills bundle (not part of the app)
 /skills/
+
+# TS incremental cache
+tsconfig.tsbuildinfo
+.vercel

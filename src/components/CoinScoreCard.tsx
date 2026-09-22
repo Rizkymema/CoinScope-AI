@@ -2,11 +2,17 @@
 
 import React from 'react';
 import { useCoinStore } from '@/store/useCoinStore';
+import { useBotStore } from '@/store/useBotStore';
 import { CoinAvatar, ChainBadge, formatPrice, formatNumber } from './CoinAvatar';
-import { AlertCircle, Target, TrendingUp, TrendingDown, BarChart3, AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
+import { AlertCircle, Target, TrendingUp, TrendingDown, BarChart3, AlertTriangle, ExternalLink, Loader2, Zap, Check, Plus } from 'lucide-react';
 
 export const CoinScoreCard: React.FC = () => {
   const { aiAnalysis, isAiLoading, aiError, fetchAIAnalysis, selectedCoin } = useCoinStore();
+  const { manualSnipeCoin, settings, addTargetSymbol, removeTargetSymbol } = useBotStore();
+
+  const isWhitelisted = selectedCoin
+    ? settings.whitelistedSymbols.some((s) => s.toUpperCase() === selectedCoin.symbol.toUpperCase())
+    : false;
 
   if (!selectedCoin && !isAiLoading) return null;
 
@@ -51,7 +57,7 @@ export const CoinScoreCard: React.FC = () => {
         </div>
         <p className="text-sm text-red-400/80 mb-4">{aiError}</p>
         <button 
-          onClick={() => selectedCoin && fetchAIAnalysis(selectedCoin.symbol)}
+          onClick={() => selectedCoin && fetchAIAnalysis(selectedCoin)}
           className="px-4 py-2 bg-red-900/30 text-red-300 rounded-xl hover:bg-red-900/50 transition-colors text-sm font-medium"
         >
           Retry Analysis
@@ -134,6 +140,44 @@ export const CoinScoreCard: React.FC = () => {
             </a>
           )}
         </div>
+
+        {/* BOT QUICK ACTION BAR */}
+        {selectedCoin && (
+          <div className="mt-4 pt-4 border-t border-white/10 flex flex-col sm:flex-row items-center gap-3">
+            <button
+              onClick={() => manualSnipeCoin(selectedCoin)}
+              className="w-full sm:flex-1 bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-400 hover:from-amber-500 hover:to-emerald-500 text-ink-950 font-extrabold py-3 px-5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 text-sm"
+            >
+              <Zap className="w-4 h-4 fill-current text-ink-950" />
+              Beli ${selectedCoin.symbol} Pakai Bot (${settings.buyAmountUsd})
+            </button>
+
+            <button
+              onClick={() =>
+                isWhitelisted
+                  ? removeTargetSymbol(selectedCoin.symbol)
+                  : addTargetSymbol(selectedCoin.symbol)
+              }
+              className={`w-full sm:w-auto py-3 px-4 rounded-xl text-xs font-bold border transition-all flex items-center justify-center gap-1.5 ${
+                isWhitelisted
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-white/5 hover:bg-white/10 text-slate-300 border-white/10'
+              }`}
+            >
+              {isWhitelisted ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  Target Bot Active
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  Jadikan Target Bot
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="p-6 space-y-5">
