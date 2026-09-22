@@ -45,3 +45,6 @@ Thumbs.db
 # TS incremental cache
 tsconfig.tsbuildinfo
 .vercel
+
+.vercel
+.env*
