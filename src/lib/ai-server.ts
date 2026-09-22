@@ -91,23 +91,28 @@ export function heuristicScore(coin: Partial<CoinData>): HeuristicScore {
   const buys = coin.txns24h?.buys || 0;
   const sells = coin.txns24h?.sells || 0;
   const ageMin = coin.createdAt ? (Date.now() - coin.createdAt) / 60_000 : null;
+  const curve = coin.bondingCurve ?? 0;
+  const onCurve = !!coin.isPumpFun && !coin.graduated;
   const flags: string[] = [];
   const positives: string[] = [];
 
-  // Fundamental: liquidity depth, market cap sanity, liquidity/mcap ratio
+  // --- Fundamental: liquidity depth at launch scale, plus liquidity/market-cap ratio ---
   let fundamental = 30;
-  if (liq >= 50_000) fundamental += 35;
-  else if (liq >= 10_000) fundamental += 25;
-  else if (liq >= 2_000) fundamental += 12;
+  if (liq >= 20_000) fundamental += 32;
+  else if (liq >= 5_000) fundamental += 24;
+  else if (liq >= 1_000) fundamental += 14;
+  else if (liq >= 300) fundamental += 6;
   else flags.push('Very thin liquidity');
+
   if (mcap > 0 && liq > 0) {
     const ratio = liq / mcap;
     if (ratio >= 0.15) {
       fundamental += 15;
       positives.push('Healthy liquidity / market-cap ratio');
-    } else if (ratio < 0.03) flags.push('Liquidity is tiny relative to market cap');
+    } else if (ratio >= 0.05) fundamental += 6;
+    else if (ratio < 0.02) flags.push('Liquidity is tiny relative to market cap');
   }
-  if (mcap > 0 && mcap < 5_000) flags.push('Micro market cap');
+  if (mcap > 0 && mcap < 4_000) flags.push('Micro market cap');
   if (coin.websites?.length) {
     fundamental += 8;
     positives.push('Has website');
@@ -117,20 +122,33 @@ export function heuristicScore(coin: Partial<CoinData>): HeuristicScore {
     positives.push('Has socials');
   }
 
-  // Technical: momentum + volume
+  // --- Technical: momentum. Fresh mints have no candle history, so curve progress
+  //     stands in for it: filling the curve means real SOL is flowing in right now. ---
   let technical = 40;
   const c5 = coin.priceChange5m ?? 0;
   const c1 = coin.priceChange1h ?? 0;
-  if (c5 > 0 && c5 < 80) technical += 15;
-  if (c5 >= 80) {
-    technical += 5;
-    flags.push('Parabolic 5m move - chasing risk');
+  const hasCandles = c5 !== 0 || c1 !== 0;
+
+  if (hasCandles) {
+    if (c5 > 0 && c5 < 80) technical += 15;
+    if (c5 >= 80) {
+      technical += 5;
+      flags.push('Parabolic 5m move - chasing risk');
+    }
+    if (c5 < -25) {
+      technical -= 20;
+      flags.push('Dumping over last 5m');
+    }
+    if (c1 > 0) technical += 10;
+  } else if (onCurve) {
+    if (curve >= 40) {
+      technical += 22;
+      positives.push('Bonding curve filling fast');
+    } else if (curve >= 15) technical += 14;
+    else if (curve >= 5) technical += 6;
+    else flags.push('Curve has barely moved');
   }
-  if (c5 < -25) {
-    technical -= 20;
-    flags.push('Dumping over last 5m');
-  }
-  if (c1 > 0) technical += 10;
+
   if (vol > 0 && mcap > 0) {
     const turnover = vol / mcap;
     if (turnover > 0.5) {
@@ -139,7 +157,7 @@ export function heuristicScore(coin: Partial<CoinData>): HeuristicScore {
     } else if (turnover < 0.05) flags.push('Low trading volume');
   }
 
-  // Sentiment: buy pressure
+  // --- Sentiment: order flow, or curve traction when there are no trade counts yet ---
   let sentiment = 50;
   if (buys + sells > 0) {
     const buyRatio = buys / (buys + sells);
@@ -151,49 +169,73 @@ export function heuristicScore(coin: Partial<CoinData>): HeuristicScore {
       flags.push('Sell pressure exceeds buys');
     }
     if (buys + sells >= 200) sentiment += 10;
-  }
-  if (coin.isPumpFun && (coin.bondingCurve ?? 0) >= 60 && !coin.graduated) {
-    sentiment += 10;
-    positives.push('Bonding curve well advanced');
+  } else if (onCurve) {
+    if (curve >= 50) {
+      sentiment += 14;
+      positives.push('Bonding curve well advanced');
+    } else if (curve >= 20) sentiment += 8;
+    else if (curve < 3) sentiment -= 10;
   }
 
-  // Risk (higher = safer)
-  let risk = 60;
+  // --- Risk (higher = safer).
+  //     Calibrated for the launch market: a brand-new Pump.fun mint is inherently risky,
+  //     but it must still be scored against its peers rather than floored at Critical,
+  //     otherwise the gate can never approve the only category this bot trades. ---
+  let risk = 62;
   if (ageMin !== null) {
-    if (ageMin < 2) {
-      risk -= 20;
-      flags.push('Launched under 2 minutes ago');
-    } else if (ageMin < 15) risk -= 8;
-    else if (ageMin > 60 * 24) risk += 10;
+    if (ageMin < 1) {
+      risk -= 14;
+      flags.push('Launched under a minute ago');
+    } else if (ageMin < 10) risk -= 6;
+    else if (ageMin > 60 * 24) risk += 8;
   }
-  if (liq < 1_000) risk -= 20;
-  if (coin.isPumpFun && !coin.graduated) risk -= 10;
+
+  if (liq >= 10_000) risk += 12;
+  else if (liq >= 2_000) risk += 6;
+  else if (liq >= 500) risk += 0;
+  else if (liq >= 100) risk -= 10;
+  else {
+    risk -= 22;
+    flags.push('Almost no liquidity to exit into');
+  }
+
+  if (onCurve) {
+    if (curve >= 50) risk += 8;
+    else if (curve >= 15) risk += 2;
+    else risk -= 8;
+  }
   if (coin.graduated) {
     risk += 10;
     positives.push('Migrated to a DEX pool');
   }
   if (!coin.websites?.length && !coin.socials?.length) {
-    risk -= 10;
+    risk -= 6;
     flags.push('No website or socials');
   }
 
   const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
-  const breakdown = { fundamental: clamp(fundamental), technical: clamp(technical), sentiment: clamp(sentiment), risk: clamp(risk) };
+  const breakdown = {
+    fundamental: clamp(fundamental),
+    technical: clamp(technical),
+    sentiment: clamp(sentiment),
+    risk: clamp(risk),
+  };
   const score = clamp(breakdown.fundamental * 0.3 + breakdown.technical * 0.25 + breakdown.sentiment * 0.2 + breakdown.risk * 0.25);
-  const riskLevel: RiskLevel = breakdown.risk >= 70 ? 'Low' : breakdown.risk >= 50 ? 'Medium' : breakdown.risk >= 30 ? 'High' : 'Critical';
+  const riskLevel: RiskLevel = breakdown.risk >= 70 ? 'Low' : breakdown.risk >= 50 ? 'Medium' : breakdown.risk >= 28 ? 'High' : 'Critical';
 
   return { score, riskLevel, flags, positives, breakdown };
 }
 
 export function heuristicDecision(coin: Partial<CoinData>, minConfidence: number): AiDecision {
   const h = heuristicScore(coin);
-  const buy = h.score >= Math.max(45, minConfidence) && h.riskLevel !== 'Critical';
+  // Critical risk is a hard veto; otherwise the user's confidence threshold decides.
+  const buy = h.score >= minConfidence && h.riskLevel !== 'Critical';
   return {
     action: buy ? 'buy' : 'skip',
     confidence: h.score,
     reason: buy
-      ? `Heuristic score ${h.score}/100 (${h.riskLevel} risk). ${h.positives.slice(0, 2).join('; ') || 'Filters passed.'}`
-      : `Heuristic score ${h.score}/100 (${h.riskLevel} risk). ${h.flags.slice(0, 2).join('; ') || 'Below confidence threshold.'}`,
+      ? `Score ${h.score}/100, ${h.riskLevel.toLowerCase()} risk. ${h.positives.slice(0, 2).join('; ') || 'Filters passed.'}`
+      : `Score ${h.score}/100, ${h.riskLevel.toLowerCase()} risk. ${h.flags.slice(0, 2).join('; ') || `Below the ${minConfidence}% threshold.`}`,
     riskLevel: h.riskLevel,
     source: 'heuristic',
   };

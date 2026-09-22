@@ -8,6 +8,7 @@ import {
   BotSettings,
   BotStats,
   BotTradeHistory,
+  StrategyPreset,
   TokenTradeEvent,
 } from '../types/bot';
 import { BotService } from '../services/bot.service';
@@ -50,11 +51,17 @@ interface BotState {
   lastAiDecision: (AiDecision & { symbol: string; at: number }) | null;
   lastDryRun: (DryRunResult & { symbol: string; at: number }) | null;
   isDryRunning: boolean;
+  /** Why candidates were rejected, newest first. Powers the "nothing is trading" hint. */
+  skipReasons: { reason: string; at: number }[];
+  evaluatedCount: number;
 
   // lifecycle
   boot: () => void;
   toggleBot: (active?: boolean) => void;
   updateSettings: (newSettings: Partial<BotSettings>) => void;
+  applyPreset: (preset: Exclude<StrategyPreset, 'custom'>) => void;
+  /** Most common rejection reason in the recent window, for the empty-state hint. */
+  getTopSkipReason: () => { reason: string; count: number; total: number } | null;
 
   // scanner + execution
   ingestCoins: (coins: CoinData[], origin?: 'stream' | 'feed') => void;
@@ -87,9 +94,67 @@ interface BotState {
   getSnapshot: () => Record<string, unknown>;
 }
 
+/**
+ * Risk presets. The filters below decide how often the bot can trade at all, so the choice
+ * belongs to the user rather than being buried in defaults.
+ *
+ * Reference point measured from the live stream: a typical fresh Pump.fun mint holds
+ * $0-$150 of liquidity in its first minute, and only a small share ever passes $1,000.
+ */
+export const STRATEGY_PRESETS: Record<Exclude<StrategyPreset, 'custom'>, Partial<BotSettings> & { label: string; blurb: string }> = {
+  conservative: {
+    label: 'Conservative',
+    blurb: 'Waits for a filled curve and real depth. Trades rarely.',
+    minLiquidityUsd: 5_000,
+    minBondingCurvePercent: 40,
+    maxTokenAgeMinutes: 1_440,
+    aiMinConfidence: 45,
+    takeProfitPercent: 40,
+    stopLossPercent: 20,
+    trailingStopPercent: 15,
+    maxPositions: 3,
+  },
+  balanced: {
+    label: 'Balanced',
+    blurb: 'Needs some money in the pool before entering. A few trades an hour.',
+    minLiquidityUsd: 500,
+    minBondingCurvePercent: 0,
+    maxTokenAgeMinutes: 120,
+    aiMinConfidence: 45,
+    takeProfitPercent: 60,
+    stopLossPercent: 25,
+    trailingStopPercent: 0,
+    maxPositions: 5,
+  },
+  aggressive: {
+    label: 'Aggressive',
+    blurb: 'Buys very early with almost no depth. Expect most entries to fail.',
+    minLiquidityUsd: 150,
+    minBondingCurvePercent: 0,
+    maxTokenAgeMinutes: 120,
+    aiMinConfidence: 35,
+    takeProfitPercent: 100,
+    stopLossPercent: 35,
+    trailingStopPercent: 0,
+    maxPositions: 8,
+  },
+};
+
+/** Fields that define a preset - editing any of them flips the preset to 'custom'. */
+const PRESET_FIELDS: (keyof BotSettings)[] = [
+  'minLiquidityUsd',
+  'minBondingCurvePercent',
+  'maxTokenAgeMinutes',
+  'aiMinConfidence',
+  'takeProfitPercent',
+  'stopLossPercent',
+  'trailingStopPercent',
+  'maxPositions',
+];
+
 const DEFAULT_SETTINGS: BotSettings = {
   buyAmountUsd: 25,
-  minLiquidityUsd: 300,
+  minLiquidityUsd: 500,
   maxRiskLevel: 'High',
   minAiScore: 60,
   targetChain: 'all',
@@ -103,7 +168,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   maxPositions: 5,
   slippagePercent: 15,
   paperTrading: true,
-  maxTokenAgeMinutes: 30,
+  maxTokenAgeMinutes: 120,
   soundAlerts: true,
   solanaRpcUrl: DEFAULT_SOLANA_RPC,
   priorityFeeSol: 0.0005,
@@ -114,8 +179,9 @@ const DEFAULT_SETTINGS: BotSettings = {
   targetOnlyMode: false,
   whitelistedSymbols: [],
   aiGateEnabled: true,
-  aiMinConfidence: 60,
+  aiMinConfidence: 45,
   aiAdjustTargets: true,
+  preset: 'balanced',
 };
 
 const MAX_LOGS = 200;
@@ -176,6 +242,8 @@ export const useBotStore = create<BotState>()(
       lastAiDecision: null,
       lastDryRun: null,
       isDryRunning: false,
+      skipReasons: [],
+      evaluatedCount: 0,
 
       log: (type, message, extra) => {
         const entry: BotLogEntry = { id: uid(`log-${type}`), timestamp: nowTime(), type, message, ...extra };
@@ -283,7 +351,10 @@ export const useBotStore = create<BotState>()(
 
       updateSettings: (newSettings) => {
         const prev = get().settings;
-        set((state) => ({ settings: { ...state.settings, ...newSettings } }));
+        const touchesPreset = PRESET_FIELDS.some((k) => newSettings[k] !== undefined && newSettings[k] !== prev[k]);
+        set((state) => ({
+          settings: { ...state.settings, ...newSettings, ...(touchesPreset ? { preset: 'custom' as StrategyPreset } : {}) },
+        }));
         if (newSettings.paperTrading !== undefined && newSettings.paperTrading !== prev.paperTrading) {
           get().log(
             newSettings.paperTrading ? 'info' : 'warning',
@@ -291,6 +362,23 @@ export const useBotStore = create<BotState>()(
           );
         }
         if (newSettings.solanaRpcUrl && newSettings.solanaRpcUrl !== prev.solanaRpcUrl) get().refreshWalletBalance();
+      },
+
+      applyPreset: (preset) => {
+        const { label, blurb, ...values } = STRATEGY_PRESETS[preset];
+        void blurb;
+        set((state) => ({ settings: { ...state.settings, ...values, preset } }));
+        get().log('info', `Strategy preset set to ${label}: min liquidity $${values.minLiquidityUsd}, AI gate >= ${values.aiMinConfidence}%, TP +${values.takeProfitPercent}% / SL -${values.stopLossPercent}%.`);
+      },
+
+      getTopSkipReason: () => {
+        const cutoff = Date.now() - 10 * 60_000;
+        const recent = get().skipReasons.filter((r) => r.at >= cutoff);
+        if (recent.length === 0) return null;
+        const tally = new Map<string, number>();
+        recent.forEach((r) => tally.set(r.reason, (tally.get(r.reason) || 0) + 1));
+        const [reason, count] = Array.from(tally.entries()).sort((a, b) => b[1] - a[1])[0];
+        return { reason, count, total: recent.length };
       },
 
       ingestCoins: (coins, origin = 'feed') => {
@@ -358,6 +446,10 @@ export const useBotStore = create<BotState>()(
             const transient = /Max positions/i.test(evalResult.reason);
             if (!transient) set((s) => ({ processedCoinIds: [...s.processedCoinIds, coin.id].slice(-2000) }));
             get().log('skip', `[SKIP] ${coin.symbol}: ${evalResult.reason}`, { coinSymbol: coin.symbol, chainId: coin.chainId });
+            set((st) => ({
+              skipReasons: [{ reason: evalResult.category, at: Date.now() }, ...st.skipReasons].slice(0, 200),
+              evaluatedCount: st.evaluatedCount + 1,
+            }));
             continue;
           }
 
@@ -392,7 +484,13 @@ export const useBotStore = create<BotState>()(
                 `[AI ${decision.source === 'ai' ? decision.model || 'claude' : 'heuristic'}] ${coin.symbol}: ${decision.action.toUpperCase()} (${decision.confidence}%) - ${decision.reason}`,
                 { coinSymbol: coin.symbol, chainId: coin.chainId }
               );
-              if (!approved) continue;
+              if (!approved) {
+                set((st) => ({
+                  skipReasons: [{ reason: 'AI gate below threshold', at: Date.now() }, ...st.skipReasons].slice(0, 200),
+                  evaluatedCount: st.evaluatedCount + 1,
+                }));
+                continue;
+              }
               if (settings.aiAdjustTargets) {
                 if (decision.suggestedTakeProfitPercent) tp = decision.suggestedTakeProfitPercent;
                 if (decision.suggestedStopLossPercent) sl = decision.suggestedStopLossPercent;
@@ -400,6 +498,7 @@ export const useBotStore = create<BotState>()(
             }
 
             if (!get().isActive) continue;
+            set((st) => ({ evaluatedCount: st.evaluatedCount + 1 }));
             await openPosition(coin, settings.buyAmountUsd, { tp, sl, decision, reason: 'auto-snipe' });
           } finally {
             set((s) => ({ pendingTradeIds: s.pendingTradeIds.filter((id) => id !== coin.id) }));

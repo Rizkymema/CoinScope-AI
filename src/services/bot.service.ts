@@ -16,26 +16,26 @@ export const BotService = {
     coin: CoinData,
     settings: BotSettings,
     activePositionsCount: number
-  ): { pass: boolean; reason: string } {
+  ): { pass: boolean; reason: string; category: string } {
     // 1. Max positions check
     if (activePositionsCount >= settings.maxPositions) {
-      return { pass: false, reason: `Max positions limit (${settings.maxPositions}) reached.` };
+      return { pass: false, reason: `Max positions limit (${settings.maxPositions}) reached.`, category: 'Max positions reached' };
     }
 
     // 2. Chain filter check
     if (settings.targetChain !== 'all') {
       const coinChain = (coin.chainId || '').toLowerCase();
       if (coinChain !== settings.targetChain.toLowerCase()) {
-        return { pass: false, reason: `Chain '${coin.chainId}' does not match target chain '${settings.targetChain}'.` };
+        return { pass: false, reason: `Chain '${coin.chainId}' does not match target chain '${settings.targetChain}'.`, category: 'Wrong chain' };
       }
     }
 
     // 3. Platform filter check (Pump.fun vs DexScreener)
     if (settings.launchPlatform === 'pumpfun' && !coin.isPumpFun) {
-      return { pass: false, reason: 'Token is not from Pump.fun launchpad.' };
+      return { pass: false, reason: 'Token is not from Pump.fun launchpad.', category: 'Wrong source' };
     }
     if (settings.launchPlatform === 'dexscreener' && coin.isPumpFun) {
-      return { pass: false, reason: 'Token is from Pump.fun (DexScreener DEX only mode enabled).' };
+      return { pass: false, reason: 'Token is from Pump.fun (DEX-only mode enabled).', category: 'Wrong source' };
     }
 
     // 4. Bonding curve filter (for Pump.fun coins)
@@ -43,7 +43,8 @@ export const BotService = {
       if (coin.bondingCurve < settings.minBondingCurvePercent) {
         return {
           pass: false,
-          reason: `Pump.fun bonding curve (${coin.bondingCurve}%) is below minimum requirement (${settings.minBondingCurvePercent}%).`,
+          reason: `Bonding curve (${coin.bondingCurve}%) is below the ${settings.minBondingCurvePercent}% minimum.`,
+          category: 'Bonding curve too low',
         };
       }
     }
@@ -53,7 +54,8 @@ export const BotService = {
     if (tvl < settings.minLiquidityUsd) {
       return {
         pass: false,
-        reason: `Liquidity ($${Math.round(tvl).toLocaleString()}) is below minimum requirement ($${settings.minLiquidityUsd.toLocaleString()}).`,
+        reason: `Liquidity ($${Math.round(tvl).toLocaleString()}) is below the $${settings.minLiquidityUsd.toLocaleString()} minimum.`,
+        category: 'Liquidity below minimum',
       };
     }
 
@@ -64,17 +66,18 @@ export const BotService = {
       if (ageMinutes > settings.maxTokenAgeMinutes) {
         return {
           pass: false,
-          reason: `Token age (${Math.round(ageMinutes)}m) exceeds maximum age (${settings.maxTokenAgeMinutes}m).`,
+          reason: `Token age (${Math.round(ageMinutes)}m) exceeds the ${settings.maxTokenAgeMinutes}m maximum.`,
+          category: 'Too old',
         };
       }
     }
 
     // 7. Basic Price Check
     if (!coin.priceUsd || coin.priceUsd <= 0) {
-      return { pass: false, reason: 'Invalid or zero token price.' };
+      return { pass: false, reason: 'Invalid or zero token price.', category: 'No usable price' };
     }
 
-    return { pass: true, reason: 'All safety filters passed. Ready to snipe!' };
+    return { pass: true, reason: 'All filters passed.', category: 'passed' };
   },
 
   /**

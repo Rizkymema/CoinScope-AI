@@ -6,6 +6,7 @@ export type ChainOption = 'all' | 'solana' | 'ethereum' | 'base' | 'bsc' | 'arbi
 export type LaunchPlatform = 'all' | 'pumpfun' | 'dexscreener';
 export type ScanSpeed = 'websocket' | '1s' | '3s' | '5s';
 export type ExecutionMode = 'paper' | 'live';
+export type StrategyPreset = 'conservative' | 'balanced' | 'aggressive' | 'custom';
 
 /** Decision returned by the AI gate (or the heuristic fallback when no API key is configured). */
 export interface AiDecision {
@@ -55,6 +56,8 @@ export interface BotSettings {
   aiMinConfidence: number;
   /** Let the AI override TP / SL with its suggested values. */
   aiAdjustTargets: boolean;
+  /** Which risk preset the filters came from ('custom' once the user edits a field). */
+  preset: StrategyPreset;
 }
 
 export interface BotPosition {

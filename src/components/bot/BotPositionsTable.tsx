@@ -9,15 +9,18 @@ import { formatPrice, timeAgo } from '@/lib/formatters';
 import { WalletService } from '@/services/wallet.service';
 
 export const BotPositionsTable: React.FC = () => {
-  const { positions, settings, isActive, pendingTradeIds, closePosition } = useBotStore(
+  const { positions, settings, isActive, pendingTradeIds, closePosition, getTopSkipReason } = useBotStore(
     useShallow((s) => ({
       positions: s.positions,
       settings: s.settings,
       isActive: s.isActive,
       pendingTradeIds: s.pendingTradeIds,
       closePosition: s.closePosition,
+      getTopSkipReason: s.getTopSkipReason,
     }))
   );
+
+  const topSkip = getTopSkipReason();
 
   return (
     <div className="lg:col-span-2 space-y-3">
@@ -45,6 +48,20 @@ export const BotPositionsTable: React.FC = () => {
               ? 'The bot is watching the launch stream. Positions appear here once a token clears your filters and the AI gate.'
               : 'Start the bot, or buy a token manually from the New Launches feed or the AI chat.'}
           </p>
+
+          {isActive && topSkip && (
+            <div className="panel-2 mt-4 px-3.5 py-2.5 text-left max-w-sm">
+              <p className="text-[11px] text-slate-500">
+                Rejected {topSkip.total} candidate{topSkip.total === 1 ? '' : 's'} in the last 10 minutes. Most common reason:
+              </p>
+              <p className="text-[13px] text-warn font-semibold mt-1">
+                {topSkip.reason} <span className="text-slate-500 font-normal">({topSkip.count}x)</span>
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                Loosen it under Settings if you want more entries, or leave it and wait for a better launch.
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-2">

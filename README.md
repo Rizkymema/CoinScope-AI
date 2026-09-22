@@ -135,3 +135,6 @@ src/
 ## Risk notice
 
 Memecoin sniping is extremely high risk; most new tokens lose all value. The AI gate reduces obvious rugs but cannot see contract-level risks (mint authority, freeze, honeypots). Start in paper mode, use small sizes and a private RPC.
+
+
+pasword pump : @rizky2026123

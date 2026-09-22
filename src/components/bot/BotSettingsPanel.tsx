@@ -12,12 +12,13 @@ import {
   Radar,
   Server,
   ShieldAlert,
+  Gauge,
   Wallet,
   X,
   XCircle,
 } from 'lucide-react';
-import { useBotStore } from '@/store/useBotStore';
-import { ChainOption, LaunchPlatform } from '@/types/bot';
+import { useBotStore, STRATEGY_PRESETS } from '@/store/useBotStore';
+import { ChainOption, LaunchPlatform, StrategyPreset } from '@/types/bot';
 import { BotMcpPanel } from './BotMcpPanel';
 
 /* ------------------------------------------------------------------ atoms */
@@ -81,12 +82,57 @@ const SectionTitle: React.FC<{ icon: React.ReactNode; children: React.ReactNode 
 /* ------------------------------------------------------------------ panel */
 
 export const BotSettingsPanel: React.FC = () => {
-  const { settings, updateSettings, dryRunLiveTrade, lastDryRun, isDryRunning } = useBotStore();
+  const { settings, updateSettings, applyPreset, dryRunLiveTrade, lastDryRun, isDryRunning } = useBotStore();
   const walletConnected = settings.phantomWalletConnected;
   const live = !settings.paperTrading;
 
   return (
     <div className="space-y-4">
+      {/* ------------------------------------------------ risk preset */}
+      <section className="panel p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold text-white flex items-center gap-2">
+              <Gauge className="w-4 h-4 text-slate-500" />
+              Risk preset
+              {settings.preset === 'custom' && <span className="chip">Custom</span>}
+            </h3>
+            <p className="text-[13px] text-slate-400 mt-1.5 max-w-2xl leading-relaxed">
+              How selective the bot is. A fresh Pump.fun mint usually holds under $150 of liquidity in its first minute,
+              so a strict preset will skip almost everything while a loose one buys tokens you cannot exit.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
+          {(Object.keys(STRATEGY_PRESETS) as Exclude<StrategyPreset, 'custom'>[]).map((id) => {
+            const preset = STRATEGY_PRESETS[id];
+            const active = settings.preset === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => applyPreset(id)}
+                aria-pressed={active}
+                className={`p-3.5 text-left rounded-xl border transition-colors duration-150 ${
+                  active ? 'bg-signal/[0.08] border-signal/40' : 'bg-ink-850 border-line hover:border-line-strong'
+                }`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className={`text-[13px] font-bold ${active ? 'text-signal' : 'text-white'}`}>{preset.label}</span>
+                  {active && <Check className="w-3.5 h-3.5 text-signal" />}
+                </span>
+                <span className="block text-[11px] text-slate-500 mt-1 leading-relaxed">{preset.blurb}</span>
+                <span className="block text-[11px] text-slate-400 font-mono mt-2">
+                  Liq &ge; ${(preset.minLiquidityUsd ?? 0).toLocaleString()} · AI &ge; {preset.aiMinConfidence}% · TP +
+                  {preset.takeProfitPercent}% / SL &minus;{preset.stopLossPercent}%
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {/* ------------------------------------------------ execution mode */}
       <section className={`panel p-5 ${live ? 'border-neg/35' : ''}`}>
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
