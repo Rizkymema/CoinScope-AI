@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { Zap, Clock, RefreshCw, Radio, Loader2, Pill, Waves, Inbox } from 'lucide-react';
+import { Zap, RefreshCw, Radio, Loader2, Pill, Waves, Inbox, Filter } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { CoinService } from '@/services/coin.service';
@@ -11,7 +11,11 @@ import { wsService } from '@/services/websocket.service';
 import { CoinAvatar, ChainBadge, formatPrice, formatNumber, timeAgo } from './CoinAvatar';
 
 const POLL_MS = 5000;
+/** A brand-new mint with no money in it is noise, not a signal. */
+const TRACTION_MIN_LIQUIDITY_USD = 150;
+
 type SourceFilter = 'all' | 'pumpfun' | 'dex';
+type SortKey = 'newest' | 'liquidity' | 'marketCap';
 
 const Change: React.FC<{ value?: number }> = ({ value }) => {
   if (value === undefined || value === null || value === 0) return <span className="text-slate-600">—</span>;
@@ -24,10 +28,30 @@ const Change: React.FC<{ value?: number }> = ({ value }) => {
   );
 };
 
+/** Bonding-curve progress: the clearest way to tell fresh mints apart. */
+const Curve: React.FC<{ percent?: number; graduated?: boolean; isPumpFun?: boolean }> = ({ percent, graduated, isPumpFun }) => {
+  if (!isPumpFun) return <span className="text-slate-600">—</span>;
+  if (graduated) return <span className="chip chip-pos">Graduated</span>;
+  const p = Math.max(0, Math.min(100, percent ?? 0));
+  return (
+    <span className="inline-flex items-center gap-2 w-full justify-end" title={`Bonding curve ${p}% filled`}>
+      <span className="w-14 h-1 rounded-full bg-ink-800 overflow-hidden shrink-0">
+        <span
+          className={`block h-full rounded-full ${p >= 70 ? 'bg-pos' : p >= 25 ? 'bg-warn' : 'bg-signal'}`}
+          style={{ width: `${Math.max(p, 2)}%` }}
+        />
+      </span>
+      <span className="font-mono text-[11px] text-slate-400 w-8 text-right">{p}%</span>
+    </span>
+  );
+};
+
 const NewCoinsLiveFeedComponent: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [source, setSource] = useState<SourceFilter>('all');
+  const [sort, setSort] = useState<SortKey>('newest');
+  const [tractionOnly, setTractionOnly] = useState(false);
   const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   const [, tick] = useState(0);
   const seenRef = useRef<Set<string>>(new Set());
@@ -60,7 +84,6 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
   };
 
   useEffect(() => {
-    // The feed listens to the launch stream even when the bot is paused.
     wsService.connect();
     wsService.subscribeNewTokens();
     fetchNewCoins();
@@ -94,12 +117,22 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
     return () => clearTimeout(timer);
   }, [recentCoins]);
 
-  const coins = useMemo(() => {
+  const { coins, hiddenCount } = useMemo(() => {
     let list = recentCoins;
-    if (sourceFilter === 'pumpfun') list = list.filter((c) => c.isPumpFun);
-    if (sourceFilter === 'dex') list = list.filter((c) => !c.isPumpFun || c.graduated);
-    return list.slice(0, 40);
-  }, [recentCoins, sourceFilter]);
+    if (source === 'pumpfun') list = list.filter((c) => c.isPumpFun);
+    if (source === 'dex') list = list.filter((c) => !c.isPumpFun || c.graduated);
+
+    const beforeTraction = list.length;
+    if (tractionOnly) list = list.filter((c) => (c.fundamentals.tvl || 0) >= TRACTION_MIN_LIQUIDITY_USD);
+
+    const sorted = [...list].sort((a, b) => {
+      if (sort === 'liquidity') return (b.fundamentals.tvl || 0) - (a.fundamentals.tvl || 0);
+      if (sort === 'marketCap') return (b.fundamentals.marketCap || 0) - (a.fundamentals.marketCap || 0);
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+
+    return { coins: sorted.slice(0, 40), hiddenCount: tractionOnly ? beforeTraction - list.length : 0 };
+  }, [recentCoins, source, sort, tractionOnly]);
 
   if (isLoading && recentCoins.length === 0) {
     return (
@@ -116,26 +149,52 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
     );
   }
 
-  const filters: { id: SourceFilter; label: string; icon: typeof Pill | null }[] = [
+  const sourceFilters: { id: SourceFilter; label: string; icon: typeof Pill | null }[] = [
     { id: 'all', label: 'All', icon: null },
     { id: 'pumpfun', label: 'Pump.fun', icon: Pill },
     { id: 'dex', label: 'DEX pools', icon: Waves },
   ];
 
+  const sorts: { id: SortKey; label: string }[] = [
+    { id: 'newest', label: 'Newest' },
+    { id: 'liquidity', label: 'Liquidity' },
+    { id: 'marketCap', label: 'Market cap' },
+  ];
+
   return (
     <section className="space-y-3">
       {/* toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="tabbar">
-          {filters.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" onClick={() => setSourceFilter(id)} data-active={sourceFilter === id} className="tab">
+          {sourceFilters.map(({ id, label, icon: Icon }) => (
+            <button key={id} type="button" onClick={() => setSource(id)} data-active={source === id} className="tab">
               {Icon && <Icon className="w-3.5 h-3.5" />}
               {label}
             </button>
           ))}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="tabbar">
+          {sorts.map(({ id, label }) => (
+            <button key={id} type="button" onClick={() => setSort(id)} data-active={sort === id} className="tab">
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setTractionOnly((v) => !v)}
+          aria-pressed={tractionOnly}
+          title={`Hide launches holding under $${TRACTION_MIN_LIQUIDITY_USD} of liquidity`}
+          className={tractionOnly ? 'chip chip-accent h-[30px] px-2.5' : 'chip h-[30px] px-2.5 hover:border-line-strong'}
+        >
+          <Filter className="w-3 h-3" />
+          With traction
+          {tractionOnly && hiddenCount > 0 && <span className="opacity-70">· {hiddenCount} hidden</span>}
+        </button>
+
+        <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-xs text-slate-400">
             <Radio className={`w-3.5 h-3.5 ${isWsConnected ? 'text-pos' : 'text-slate-600'}`} />
             {isWsConnected ? 'Stream live' : 'Connecting…'}
@@ -156,15 +215,15 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
       {/* table */}
       <div className="panel overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-[13px] min-w-[880px]">
+          <table className="w-full text-left text-[13px] min-w-[920px]">
             <thead>
               <tr className="thead border-b border-line bg-ink-850/40">
-                <th className="py-2.5 pl-4 pr-3 font-semibold w-[38%]">Token</th>
+                <th className="py-2.5 pl-4 pr-3 font-semibold w-[32%]">Token</th>
                 <th className="py-2.5 px-3 font-semibold text-right">Price</th>
-                <th className="py-2.5 px-3 font-semibold text-right">5m</th>
-                <th className="py-2.5 px-3 font-semibold text-right">24h</th>
                 <th className="py-2.5 px-3 font-semibold text-right">Market cap</th>
                 <th className="py-2.5 px-3 font-semibold text-right">Liquidity</th>
+                <th className="py-2.5 px-3 font-semibold text-right w-[132px]">Curve</th>
+                <th className="py-2.5 px-3 font-semibold text-right">24h</th>
                 <th className="py-2.5 px-3 font-semibold text-right">Age</th>
                 <th className="py-2.5 pl-3 pr-4 font-semibold text-right">Action</th>
               </tr>
@@ -173,6 +232,7 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
               {coins.map((coin) => {
                 const held = positions.some((p) => p.coin.id === coin.id);
                 const busy = pendingTradeIds.includes(coin.id);
+                const liq = coin.fundamentals.tvl || 0;
                 return (
                   <tr
                     key={coin.id}
@@ -186,12 +246,6 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-semibold text-white truncate">{coin.symbol}</span>
                             <ChainBadge chainId={coin.chainId} />
-                            {coin.isPumpFun && (
-                              <span className="chip chip-info" title="Pump.fun launch">
-                                <Pill className="w-3 h-3" />
-                                {coin.graduated ? 'Graduated' : `${coin.bondingCurve ?? 0}%`}
-                              </span>
-                            )}
                             {held && <span className="chip chip-pos">Holding</span>}
                           </div>
                           <p className="text-[11px] text-slate-500 truncate mt-0.5">{coin.name}</p>
@@ -201,27 +255,24 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
                     <td className="py-2.5 px-3 text-right font-mono text-white font-semibold whitespace-nowrap">
                       {formatPrice(coin.priceUsd)}
                     </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-slate-300 whitespace-nowrap">
+                      {formatNumber(coin.fundamentals.marketCap)}
+                    </td>
+                    <td
+                      className={`py-2.5 px-3 text-right font-mono whitespace-nowrap ${
+                        liq >= TRACTION_MIN_LIQUIDITY_USD ? 'text-slate-200' : 'text-slate-600'
+                      }`}
+                    >
+                      {formatNumber(liq)}
+                    </td>
                     <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      <Change value={coin.priceChange5m} />
+                      <Curve percent={coin.bondingCurve} graduated={coin.graduated} isPumpFun={coin.isPumpFun} />
                     </td>
                     <td className="py-2.5 px-3 text-right whitespace-nowrap">
                       <Change value={coin.priceChange24h} />
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-300 whitespace-nowrap">
-                      {formatNumber(coin.fundamentals.marketCap)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-300 whitespace-nowrap">
-                      {formatNumber(coin.fundamentals.tvl)}
-                    </td>
                     <td className="py-2.5 px-3 text-right text-[11px] text-slate-500 whitespace-nowrap">
-                      {coin.createdAt ? (
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {timeAgo(coin.createdAt)}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
+                      {coin.createdAt ? timeAgo(coin.createdAt) : '—'}
                     </td>
                     <td className="py-2.5 pl-3 pr-4 text-right">
                       <button
@@ -248,11 +299,22 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
         {coins.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-center px-6">
             <Inbox className="w-7 h-7 text-slate-600 mb-3" />
-            <p className="text-[13px] font-semibold text-slate-300">Waiting for launches</p>
-            <p className="text-xs text-slate-500 mt-1">The Pump.fun stream usually delivers a new mint every few seconds.</p>
+            <p className="text-[13px] font-semibold text-slate-300">
+              {tractionOnly ? 'No launches with traction yet' : 'Waiting for launches'}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {tractionOnly
+                ? `Nothing currently holds more than $${TRACTION_MIN_LIQUIDITY_USD} of liquidity. Turn the filter off to see every mint.`
+                : 'The Pump.fun stream usually delivers a new mint every few seconds.'}
+            </p>
           </div>
         )}
       </div>
+
+      <p className="text-[11px] text-slate-500">
+        Most fresh mints open at the same bonding-curve price with a few dollars of liquidity. Curve progress and liquidity
+        are what separate a real launch from noise.
+      </p>
     </section>
   );
 };

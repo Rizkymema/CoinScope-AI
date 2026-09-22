@@ -162,7 +162,7 @@ export const useBotStore = create<BotState>()(
           id: uid('log-init'),
           timestamp: nowTime(),
           type: 'info',
-          message: 'CoinScope bot engine ready. Paper trading is ON by default - switch to live in Settings after connecting a wallet.',
+          message: 'CoinScope bot engine ready. Paper trading is ON by default. Connect a wallet, then switch to live under Bot > Settings.',
         },
       ],
       recentCoins: [],
@@ -210,7 +210,11 @@ export const useBotStore = create<BotState>()(
           .positions.filter((p) => isSolana(p.coin))
           .map((p) => p.mint || mintOf(p.coin));
         if (solMints.length) wsService.subscribeTokenTrades(solMints);
-        if (get().positions.length > 0 || get().isActive) wsService.connect();
+
+        // Always stream new launches: the scanner list feeds the UI, the AI chat and the MCP tools,
+        // so it must be populated no matter which tab is open.
+        wsService.connect();
+        wsService.subscribeNewTokens();
 
         if (!pricePollTimer) {
           pricePollTimer = setInterval(() => {

@@ -27,7 +27,7 @@ export const AutoBotDashboard: React.FC = () => {
   const tabs: { id: SubTab; label: string; icon: typeof Target; count?: number }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, count: positionsCount },
     { id: 'targets', label: 'Watchlist', icon: Target, count: targetsCount },
-    { id: 'settings', label: 'Strategy', icon: SlidersHorizontal },
+    { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
     { id: 'history', label: 'History', icon: History, count: historyCount },
   ];
 

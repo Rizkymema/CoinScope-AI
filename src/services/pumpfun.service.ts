@@ -26,9 +26,17 @@ export interface PumpFunCoin {
   virtual_sol_reserves?: number;
   virtual_token_reserves?: number;
   real_sol_reserves?: number;
+  real_token_reserves?: number;
   total_supply?: number;
   market_cap?: number;
   usd_market_cap?: number;
+  /** Newer field name for the same figure. */
+  market_cap_usd?: number;
+  pool_address?: string;
+  program?: string;
+  protocol?: string;
+  quote_mint?: string;
+  quote_decimals?: number;
   reply_count?: number;
   nsfw?: boolean;
   king_of_the_hill_timestamp?: number | null;
@@ -55,11 +63,23 @@ export interface PumpPortalNewToken {
 const metadataCache = new Map<string, { image?: string; description?: string }>();
 const metadataInFlight = new Map<string, Promise<{ image?: string; description?: string } | null>>();
 
-function bondingCurvePercentFromSol(vSol: number | undefined): number | undefined {
-  if (!vSol || !Number.isFinite(vSol)) return undefined;
-  // Virtual reserves start at 30 SOL and the curve completes when ~115 SOL of virtual reserves are reached.
-  const collected = Math.max(0, vSol - 30);
-  return Math.max(0, Math.min(100, Math.round((collected / PUMPFUN_GRADUATION_SOL) * 100)));
+/**
+ * Curve progress from the SOL actually collected.
+ *
+ * The virtual-reserve figure is unreliable now that pump.fun serves several protocols and
+ * quote mints (some rows report reserves far below the classic 30 SOL start), which made a
+ * virtual-reserve formula report 100% for empty tokens. Real reserves against the ~85 SOL
+ * graduation target is the definition of progress and degrades safely to 0.
+ */
+function curvePercentFromRealSol(realSol: number | undefined): number | undefined {
+  if (realSol === undefined || !Number.isFinite(realSol) || realSol < 0) return undefined;
+  return Math.max(0, Math.min(100, Math.round((realSol / PUMPFUN_GRADUATION_SOL) * 100)));
+}
+
+/** Stream events report virtual reserves in SOL starting at 30, so they still use the offset form. */
+function curvePercentFromVirtualSol(vSol: number | undefined): number | undefined {
+  if (!vSol || !Number.isFinite(vSol) || vSol < 30) return 0;
+  return Math.max(0, Math.min(100, Math.round(((vSol - 30) / PUMPFUN_GRADUATION_SOL) * 100)));
 }
 
 export const PumpFunService = {
@@ -93,11 +113,12 @@ export const PumpFunService = {
       priceSol = item.market_cap / supply;
     }
 
-    const mcapUsd = item.usd_market_cap || (priceSol && solPriceUsd ? priceSol * supply * solPriceUsd : 0);
+    const mcapUsd =
+      item.usd_market_cap || item.market_cap_usd || (priceSol && solPriceUsd ? priceSol * supply * solPriceUsd : 0);
     const priceUsd = mcapUsd > 0 ? mcapUsd / supply : priceSol * solPriceUsd;
-    const vSol = item.virtual_sol_reserves ? item.virtual_sol_reserves / 1e9 : undefined;
-    const bondingCurve = item.complete ? 100 : bondingCurvePercentFromSol(vSol);
-    const liquiditySol = item.real_sol_reserves ? item.real_sol_reserves / 1e9 : vSol ? Math.max(0, vSol - 30) : 0;
+    const realSol = typeof item.real_sol_reserves === 'number' ? item.real_sol_reserves / 1e9 : undefined;
+    const bondingCurve = item.complete ? 100 : curvePercentFromRealSol(realSol) ?? 0;
+    const liquiditySol = realSol ?? 0;
 
     return {
       id: `solana:${mint}`,
@@ -166,7 +187,7 @@ export const PumpFunService = {
       url: `https://dexscreener.com/solana/${evt.mint}`,
       createdAt: Date.now(),
       isPumpFun: pool === 'pump' || pool === 'pump-amm' || evt.mint.toLowerCase().endsWith('pump'),
-      bondingCurve: bondingCurvePercentFromSol(vSol) ?? 0,
+      bondingCurve: curvePercentFromVirtualSol(vSol) ?? 0,
       graduated: false,
       pumpFunUrl: `https://pump.fun/coin/${evt.mint}`,
       metadataUri: evt.uri,

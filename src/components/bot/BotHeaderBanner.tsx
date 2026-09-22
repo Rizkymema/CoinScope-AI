@@ -70,7 +70,9 @@ export const BotHeaderBanner: React.FC = () => {
             <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
               <span className="chip" title={isWsConnected ? 'PumpPortal launch stream' : 'Stream reconnecting'}>
                 <Radio className={`w-3 h-3 ${isWsConnected ? 'text-pos' : 'text-slate-500'}`} />
-                {isWsConnected ? `Stream ${wsLatencyMs}ms · ${wsEventsPerMinute}/min` : 'Stream offline'}
+                {isWsConnected
+                  ? `Stream · ${wsEventsPerMinute}/min${wsLatencyMs > 8000 ? ` · quiet ${Math.round(wsLatencyMs / 1000)}s` : ''}`
+                  : 'Stream offline'}
               </span>
               {settings.aiGateEnabled && (
                 <span className="chip">

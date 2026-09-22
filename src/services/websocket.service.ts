@@ -11,10 +11,9 @@ import { SolPriceService } from './solprice.service';
  * Docs: https://pumpportal.fun/data-api/real-time
  */
 const PUMPPORTAL_WS_URL = 'wss://pumpportal.fun/api/data';
-const PUMPPORTAL_HTTP_URL = 'https://pumpportal.fun/';
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
-const LATENCY_PROBE_MS = 10_000;
+const HEALTH_TICK_MS = 2_000;
 
 type TokenCallback = (coin: CoinData) => void;
 type TradeCallback = (trade: TokenTradeEvent) => void;
@@ -27,7 +26,8 @@ export class PumpPortalWebSocket {
   private tradeListeners = new Set<TradeCallback>();
   private migrationListeners = new Set<MigrationCallback>();
   private connListeners = new Set<ConnectionCallback>();
-  private latencyTimer: ReturnType<typeof setInterval> | null = null;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private lastEventAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private manuallyClosed = false;
@@ -71,8 +71,9 @@ export class PumpPortalWebSocket {
       this.isConnected = true;
       this.reconnectAttempts = 0;
       this.notifyConn();
+      this.lastEventAt = Date.now();
       this.resubscribe();
-      this.startLatencyProbe();
+      this.startHealthTicker();
     };
 
     socket.onmessage = (event) => {
@@ -133,14 +134,14 @@ export class PumpPortalWebSocket {
     socket.onclose = () => {
       this.isConnected = false;
       this.notifyConn();
-      this.stopLatencyProbe();
+      this.stopHealthTicker();
       if (!this.manuallyClosed) this.scheduleReconnect();
     };
   }
 
   disconnect() {
     this.manuallyClosed = true;
-    this.stopLatencyProbe();
+    this.stopHealthTicker();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -255,6 +256,7 @@ export class PumpPortalWebSocket {
 
   private recordEvent() {
     const now = Date.now();
+    this.lastEventAt = now;
     this.eventTimestamps.push(now);
     if (this.eventTimestamps.length > 500) this.eventTimestamps.splice(0, this.eventTimestamps.length - 500);
   }
@@ -265,28 +267,21 @@ export class PumpPortalWebSocket {
     return this.eventTimestamps.length;
   }
 
-  /** Measures a real HTTP round trip to the PumpPortal host (the socket protocol has no ping reply). */
-  private async probeLatency() {
-    const started = performance.now();
-    try {
-      await fetch(PUMPPORTAL_HTTP_URL, { method: 'HEAD', mode: 'no-cors', cache: 'no-store' });
-      this.latencyMs = Math.round(performance.now() - started);
-    } catch {
-      // keep the previous reading
-    }
+  /** Milliseconds since the last message arrived - a real measure of stream health. */
+  private refreshHealth() {
+    this.latencyMs = this.lastEventAt ? Date.now() - this.lastEventAt : 0;
     this.notifyConn();
   }
 
-  private startLatencyProbe() {
-    this.stopLatencyProbe();
-    this.probeLatency();
-    this.latencyTimer = setInterval(() => this.probeLatency(), LATENCY_PROBE_MS);
+  private startHealthTicker() {
+    this.stopHealthTicker();
+    this.healthTimer = setInterval(() => this.refreshHealth(), HEALTH_TICK_MS);
   }
 
-  private stopLatencyProbe() {
-    if (this.latencyTimer) {
-      clearInterval(this.latencyTimer);
-      this.latencyTimer = null;
+  private stopHealthTicker() {
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
     }
   }
 
