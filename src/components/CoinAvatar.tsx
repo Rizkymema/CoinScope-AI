@@ -2,21 +2,32 @@
 
 import React, { useState } from 'react';
 
-// Map of known chain IDs to their colors
-const CHAIN_COLORS: Record<string, { bg: string; text: string; label: string }> = {
-  solana: { bg: 'bg-gradient-to-br from-purple-500 to-fuchsia-600', text: 'text-purple-300', label: 'SOL' },
-  ethereum: { bg: 'bg-gradient-to-br from-blue-500 to-indigo-600', text: 'text-blue-300', label: 'ETH' },
-  bsc: { bg: 'bg-gradient-to-br from-yellow-500 to-amber-600', text: 'text-yellow-300', label: 'BSC' },
-  base: { bg: 'bg-gradient-to-br from-blue-400 to-blue-600', text: 'text-blue-300', label: 'BASE' },
-  arbitrum: { bg: 'bg-gradient-to-br from-sky-400 to-blue-600', text: 'text-sky-300', label: 'ARB' },
-  polygon: { bg: 'bg-gradient-to-br from-violet-500 to-purple-700', text: 'text-violet-300', label: 'POLY' },
-  avalanche: { bg: 'bg-gradient-to-br from-red-500 to-rose-600', text: 'text-red-300', label: 'AVAX' },
-  optimism: { bg: 'bg-gradient-to-br from-red-400 to-red-600', text: 'text-red-300', label: 'OP' },
-  fantom: { bg: 'bg-gradient-to-br from-blue-500 to-cyan-600', text: 'text-blue-300', label: 'FTM' },
-  cronos: { bg: 'bg-gradient-to-br from-blue-800 to-indigo-900', text: 'text-blue-300', label: 'CRO' },
-  sui: { bg: 'bg-gradient-to-br from-cyan-400 to-teal-600', text: 'text-cyan-300', label: 'SUI' },
-  ton: { bg: 'bg-gradient-to-br from-sky-500 to-blue-700', text: 'text-sky-300', label: 'TON' },
+/**
+ * Chain identity. Solid brand colours only - no gradients, no decorative tints.
+ * `dot` is the colour used for the corner badge, `chip` for the inline text badge.
+ */
+const CHAINS: Record<string, { label: string; dot: string; chip: string }> = {
+  solana: { label: 'SOL', dot: '#9945ff', chip: 'bg-[#9945ff]/12 text-[#c4a1ff] border-[#9945ff]/25' },
+  ethereum: { label: 'ETH', dot: '#627eea', chip: 'bg-[#627eea]/12 text-[#a3b4f5] border-[#627eea]/25' },
+  base: { label: 'BASE', dot: '#0052ff', chip: 'bg-[#0052ff]/14 text-[#7fa5ff] border-[#0052ff]/28' },
+  bsc: { label: 'BNB', dot: '#f0b90b', chip: 'bg-[#f0b90b]/12 text-[#f5d67f] border-[#f0b90b]/25' },
+  arbitrum: { label: 'ARB', dot: '#28a0f0', chip: 'bg-[#28a0f0]/12 text-[#93cff8] border-[#28a0f0]/25' },
+  polygon: { label: 'POL', dot: '#8247e5', chip: 'bg-[#8247e5]/12 text-[#c1a3f2] border-[#8247e5]/25' },
+  avalanche: { label: 'AVAX', dot: '#e84142', chip: 'bg-[#e84142]/12 text-[#f4a0a0] border-[#e84142]/25' },
+  optimism: { label: 'OP', dot: '#ff0420', chip: 'bg-[#ff0420]/12 text-[#ff8291] border-[#ff0420]/25' },
+  sui: { label: 'SUI', dot: '#4da2ff', chip: 'bg-[#4da2ff]/12 text-[#a6d0ff] border-[#4da2ff]/25' },
+  ton: { label: 'TON', dot: '#0098ea', chip: 'bg-[#0098ea]/12 text-[#7fcbf4] border-[#0098ea]/25' },
 };
+
+/** Muted monogram tints. Low saturation so avatars never compete with data. */
+const MONOGRAM_TINTS = [
+  'bg-[#1b2440] text-[#9db4e8]',
+  'bg-[#1c2c33] text-[#8fc4d4]',
+  'bg-[#2a2338] text-[#b6a0d8]',
+  'bg-[#1f2e28] text-[#8fcbb0]',
+  'bg-[#31261f] text-[#d8ae8c]',
+  'bg-[#2e2029] text-[#d59db3]',
+];
 
 interface CoinAvatarProps {
   imageUrl?: string;
@@ -27,29 +38,22 @@ interface CoinAvatarProps {
   className?: string;
 }
 
-const SIZE_MAP = {
-  xs: 'w-6 h-6',
-  sm: 'w-8 h-8',
-  md: 'w-10 h-10',
-  lg: 'w-12 h-12',
-  xl: 'w-16 h-16',
+const SIZE = { xs: 'w-5 h-5', sm: 'w-7 h-7', md: 'w-9 h-9', lg: 'w-11 h-11', xl: 'w-14 h-14' };
+const TEXT = { xs: 'text-[8px]', sm: 'text-[9px]', md: 'text-[11px]', lg: 'text-xs', xl: 'text-sm' };
+const BADGE = {
+  xs: 'w-2 h-2 -bottom-px -right-px',
+  sm: 'w-2.5 h-2.5 -bottom-0.5 -right-0.5',
+  md: 'w-3 h-3 -bottom-0.5 -right-0.5',
+  lg: 'w-3.5 h-3.5 -bottom-0.5 -right-0.5',
+  xl: 'w-4 h-4 -bottom-0.5 -right-0.5',
 };
 
-const TEXT_SIZE_MAP = {
-  xs: 'text-[8px]',
-  sm: 'text-[10px]',
-  md: 'text-xs',
-  lg: 'text-sm',
-  xl: 'text-lg',
-};
-
-const CHAIN_BADGE_SIZE = {
-  xs: 'w-3 h-3 -bottom-0.5 -right-0.5',
-  sm: 'w-3.5 h-3.5 -bottom-0.5 -right-0.5',
-  md: 'w-4 h-4 -bottom-0.5 -right-0.5',
-  lg: 'w-5 h-5 -bottom-0.5 -right-0.5',
-  xl: 'w-6 h-6 -bottom-1 -right-1',
-};
+function tintFor(symbol: string): string {
+  const s = String(symbol || 'UN');
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return MONOGRAM_TINTS[hash % MONOGRAM_TINTS.length];
+}
 
 export const CoinAvatar: React.FC<CoinAvatarProps> = ({
   imageUrl,
@@ -59,57 +63,37 @@ export const CoinAvatar: React.FC<CoinAvatarProps> = ({
   showChain = true,
   className = '',
 }) => {
-  const [imgError, setImgError] = useState(false);
-  const safeChainId = String(chainId || '').toLowerCase();
-  const chainInfo = safeChainId ? CHAIN_COLORS[safeChainId] : null;
-
-  // Generate a consistent gradient from the symbol safely
-  const getSymbolGradient = (sym: string) => {
-    const safeSym = String(sym || 'UK');
-    const hash = safeSym.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const gradients = [
-      'from-indigo-500 to-purple-600',
-      'from-emerald-500 to-teal-600',
-      'from-orange-500 to-red-600',
-      'from-cyan-500 to-blue-600',
-      'from-pink-500 to-rose-600',
-      'from-violet-500 to-fuchsia-600',
-      'from-amber-500 to-yellow-600',
-      'from-lime-500 to-green-600',
-    ];
-    return gradients[(hash || 0) % gradients.length];
-  };
-
-  const displaySymbol = String(symbol || 'UN').slice(0, 2).toUpperCase();
+  const [failed, setFailed] = useState(false);
+  const chain = CHAINS[String(chainId || '').toLowerCase()];
+  const monogram = String(symbol || 'UN').replace(/^\$/, '').slice(0, 2).toUpperCase();
 
   return (
     <div className={`relative inline-flex shrink-0 ${className}`}>
-      {imageUrl && !imgError ? (
+      {imageUrl && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={imageUrl}
-          alt={`${displaySymbol} logo`}
-          className={`${SIZE_MAP[size]} rounded-full object-cover ring-2 ring-slate-700/50`}
-          onError={() => setImgError(true)}
+          alt=""
+          aria-hidden="true"
+          className={`${SIZE[size]} rounded-full object-cover bg-ink-850 ring-1 ring-white/10`}
+          onError={() => setFailed(true)}
           loading="lazy"
         />
       ) : (
         <div
-          className={`${SIZE_MAP[size]} rounded-full bg-gradient-to-br ${getSymbolGradient(symbol)} flex items-center justify-center ${TEXT_SIZE_MAP[size]} font-bold text-white ring-2 ring-slate-700/50`}
+          aria-hidden="true"
+          className={`${SIZE[size]} ${TEXT[size]} ${tintFor(symbol)} rounded-full ring-1 ring-white/10 flex items-center justify-center font-bold tracking-tight`}
         >
-          {displaySymbol}
+          {monogram}
         </div>
       )}
 
-      {/* Chain badge */}
-      {showChain && chainInfo && (
-        <div
-          className={`absolute ${CHAIN_BADGE_SIZE[size]} rounded-full ${chainInfo.bg} flex items-center justify-center ring-2 ring-slate-900`}
-          title={chainInfo.label}
-        >
-          <span className="text-[6px] font-bold text-white leading-none">
-            {String(chainInfo.label).slice(0, 1)}
-          </span>
-        </div>
+      {showChain && chain && (
+        <span
+          className={`absolute ${BADGE[size]} rounded-full ring-2 ring-ink-900`}
+          style={{ backgroundColor: chain.dot }}
+          title={chain.label}
+        />
       )}
     </div>
   );
@@ -117,18 +101,15 @@ export const CoinAvatar: React.FC<CoinAvatarProps> = ({
 
 export const ChainBadge: React.FC<{ chainId?: string; className?: string }> = ({ chainId, className = '' }) => {
   if (!chainId) return null;
-  const safeChainId = String(chainId).toLowerCase();
-  const chain = CHAIN_COLORS[safeChainId];
-  if (!chain) {
-    return (
-      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-700 text-slate-300 ${className}`}>
-        {String(chainId).toUpperCase()}
-      </span>
-    );
-  }
+  const chain = CHAINS[String(chainId).toLowerCase()];
+  const label = chain?.label ?? String(chainId).slice(0, 4).toUpperCase();
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${chain.bg} text-white ${className}`}>
-      {chain.label}
+    <span
+      className={`inline-flex items-center h-[18px] px-1.5 rounded-[5px] border text-[10px] font-bold leading-none ${
+        chain?.chip ?? 'bg-ink-800 text-slate-400 border-white/8'
+      } ${className}`}
+    >
+      {label}
     </span>
   );
 };

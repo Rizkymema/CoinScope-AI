@@ -1,5 +1,11 @@
 import type { Config } from 'tailwindcss'
 
+/**
+ * Obsidian workstation design system.
+ * One font family, one accent, solid surfaces, hairline borders.
+ * The `ink` / `signal` scales are remapped here so existing class names
+ * inherit the system without per-file colour edits.
+ */
 const config: Config = {
   content: [
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
@@ -9,71 +15,91 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        display: ['Syne', 'system-ui', 'sans-serif'],
-        sans: ['DM Sans', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        // Single family across display, body and numeric data.
+        sans: ['Manrope', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        display: ['Manrope', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        mono: ['Manrope', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
       },
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
+        // hairlines
+        line: {
+          DEFAULT: 'rgba(255,255,255,0.06)',
+          strong: 'rgba(255,255,255,0.12)',
+        },
+        // surface ramp
         ink: {
-          950: '#070b12',
-          900: '#0c121c',
-          850: '#111827',
-          800: '#1a2332',
-          700: '#243044',
-          600: '#334155',
+          950: '#050814',
+          900: '#0a0e1c',
+          850: '#0e1426',
+          800: '#141b30',
+          700: '#1c2540',
+          600: '#2b3654',
         },
+        // brand accent (action beacon only)
         signal: {
-          DEFAULT: '#14b8a6',
-          soft: '#2dd4bf',
-          muted: '#0f766e',
+          DEFAULT: '#00d2ff',
+          soft: '#4de0ff',
+          muted: '#0093b5',
         },
+        // semantic status
+        pos: '#34d399',
+        neg: '#f87171',
+        warn: '#fbbf24',
+        info: '#a78bfa',
+
+        border: 'rgba(255,255,255,0.06)',
+        input: 'rgba(255,255,255,0.06)',
+        ring: '#00d2ff',
+        background: '#050814',
+        foreground: '#f1f5f9',
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: '#00d2ff',
+          foreground: '#050814',
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: '#0e1426',
+          foreground: '#f1f5f9',
         },
         destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
+          DEFAULT: '#f87171',
+          foreground: '#050814',
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: '#0e1426',
+          foreground: '#94a3b8',
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: '#0e1426',
+          foreground: '#f1f5f9',
         },
         popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
+          DEFAULT: '#0a0e1c',
+          foreground: '#f1f5f9',
         },
         card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
+          DEFAULT: '#0a0e1c',
+          foreground: '#f1f5f9',
         },
       },
+      borderRadius: {
+        DEFAULT: '8px',
+        md: '8px',
+        lg: '10px',
+        xl: '12px',
+        '2xl': '12px',
+        '3xl': '12px',
+      },
+      transitionTimingFunction: {
+        standard: 'cubic-bezier(0.4, 0, 0.2, 1)',
+      },
       keyframes: {
-        'fade-up': {
-          from: { opacity: '0', transform: 'translateY(14px)' },
+        'fade-in': {
+          from: { opacity: '0', transform: 'translateY(6px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
-        },
-        'soft-pulse': {
-          '0%, 100%': { opacity: '0.45' },
-          '50%': { opacity: '0.85' },
         },
       },
       animation: {
-        'fade-up': 'fade-up 0.55s ease-out both',
-        'soft-pulse': 'soft-pulse 3.2s ease-in-out infinite',
+        'fade-up': 'fade-in 200ms cubic-bezier(0.4, 0, 0.2, 1) both',
       },
     },
   },

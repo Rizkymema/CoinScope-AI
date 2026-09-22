@@ -2,65 +2,418 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   DESIGN TOKENS
+   Obsidian workstation: solid surfaces, hairline borders, one accent.
+   Accent is a beacon for action and never a background wash (<=10% of screen).
+   ========================================================================== */
 @layer base {
   :root {
-    --background: 220 40% 4%;
-    --foreground: 210 40% 98%;
-    --card: 220 32% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 220 32% 8%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 173 80% 40%;
-    --primary-foreground: 220 40% 4%;
-    --secondary: 217 28% 14%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 28% 14%;
-    --muted-foreground: 215 16% 62%;
-    --accent: 217 28% 14%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217 24% 18%;
-    --input: 217 24% 18%;
-    --ring: 173 80% 40%;
-  }
-}
+    /* surfaces */
+    --bg: #050814;
+    --surface: #0a0e1c;
+    --surface-2: #0e1426;
+    --surface-3: #141b30;
 
-@layer base {
+    /* hairlines */
+    --line: rgba(255, 255, 255, 0.06);
+    --line-strong: rgba(255, 255, 255, 0.12);
+
+    /* text (all >= 4.5:1 on --surface) */
+    --text: #f1f5f9;
+    --text-dim: #94a3b8;
+    --text-faint: #64748b;
+
+    /* accent + semantic status */
+    --accent: #00d2ff;
+    --accent-ink: #050814;
+    --pos: #34d399;
+    --neg: #f87171;
+    --warn: #fbbf24;
+    --info: #a78bfa;
+
+    /* geometry */
+    --r-card: 12px;
+    --r-control: 8px;
+    --r-micro: 6px;
+
+    /* motion */
+    --ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --dur: 160ms;
+
+    /* shadcn-compatible aliases */
+    --background: 226 62% 5%;
+    --foreground: 210 40% 97%;
+    --card: 227 47% 8%;
+    --card-foreground: 210 40% 97%;
+    --popover: 227 47% 8%;
+    --popover-foreground: 210 40% 97%;
+    --primary: 192 100% 50%;
+    --primary-foreground: 226 62% 5%;
+    --secondary: 227 42% 11%;
+    --secondary-foreground: 210 40% 97%;
+    --muted: 227 42% 11%;
+    --muted-foreground: 215 20% 65%;
+    --accent-foreground: 210 40% 97%;
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 226 62% 5%;
+    --border: 0 0% 100%;
+    --input: 0 0% 100%;
+    --ring: 192 100% 50%;
+  }
+
   * {
-    @apply border-border;
+    border-color: var(--line);
   }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--bg);
+    color: var(--text);
+    font-feature-settings: 'cv11', 'ss01';
+    font-variant-ligatures: none;
+  }
+
+  /* Numeric data must align in columns. */
+  .font-mono,
+  .tabular,
+  table td,
+  table th {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: 'tnum' on, 'lnum' on;
+  }
+
+  /* Visible, consistent keyboard focus everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--r-micro);
+  }
+
+  button,
+  [role='button'],
+  a,
+  summary,
+  label[for] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background-color: rgba(0, 210, 255, 0.28);
+    color: #ffffff;
   }
 }
 
-/* ============================================
-   ATMOSPHERE
-   ============================================ */
-.gradient-mesh {
-  background-color: #070b12;
-  background-image:
-    radial-gradient(ellipse 80% 55% at 12% -10%, rgba(20, 184, 166, 0.14), transparent 55%),
-    radial-gradient(ellipse 60% 45% at 90% 8%, rgba(245, 158, 11, 0.08), transparent 50%),
-    radial-gradient(ellipse 50% 40% at 50% 100%, rgba(14, 165, 233, 0.06), transparent 55%),
-    linear-gradient(180deg, #070b12 0%, #0a1018 45%, #070b12 100%);
+/* ==========================================================================
+   PRIMITIVES
+   ========================================================================== */
+@layer components {
+  /* Page background: flat obsidian, no glow blobs, no mesh gradient. */
+  .app-bg {
+    background-color: var(--bg);
+  }
+
+  /* Flat container. No blur, no drop shadow, no side stripe. */
+  .panel {
+    background-color: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+  }
+
+  .panel-2 {
+    background-color: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+  }
+
+  /* Interactive container: shadow appears only on hover, per the flat-container rule. */
+  .panel-interactive {
+    background-color: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+    transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+  }
+
+  .panel-interactive:hover {
+    border-color: var(--line-strong);
+    background-color: var(--surface-2);
+  }
+
+  /* Legacy alias used across components - now flat. */
+  .surface {
+    background-color: var(--surface);
+    border: 1px solid var(--line);
+  }
+
+  .surface-hover:hover {
+    border-color: var(--line-strong);
+    background-color: var(--surface-2);
+  }
+
+  /* --- controls --- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: var(--r-control);
+    border: 1px solid transparent;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+
+  .btn:disabled {
+    opacity: 0.45;
+  }
+
+  .btn-lg {
+    height: 44px;
+    padding: 0 20px;
+    font-size: 14px;
+  }
+
+  .btn-sm {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+    border-radius: var(--r-micro);
+  }
+
+  .btn-primary {
+    background-color: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background-color: #4de0ff;
+  }
+
+  .btn-secondary {
+    background-color: var(--surface-2);
+    color: var(--text);
+    border-color: var(--line);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--surface-3);
+    border-color: var(--line-strong);
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    color: var(--text-dim);
+  }
+
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--surface-2);
+    color: var(--text);
+  }
+
+  .btn-positive {
+    background-color: var(--pos);
+    color: var(--accent-ink);
+  }
+
+  .btn-positive:hover:not(:disabled) {
+    background-color: #6ee7b7;
+  }
+
+  .btn-danger {
+    background-color: rgba(248, 113, 113, 0.12);
+    color: var(--neg);
+    border-color: rgba(248, 113, 113, 0.28);
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background-color: rgba(248, 113, 113, 0.2);
+  }
+
+  .field {
+    width: 100%;
+    background-color: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+    padding: 9px 12px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  }
+
+  .field::placeholder {
+    color: var(--text-faint);
+  }
+
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 210, 255, 0.12);
+    outline: none;
+  }
+
+  select.field {
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 32px;
+  }
+
+  /* --- labels & chips --- */
+  .label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: var(--r-micro);
+    border: 1px solid var(--line);
+    background-color: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .chip-accent {
+    background-color: rgba(0, 210, 255, 0.1);
+    border-color: rgba(0, 210, 255, 0.25);
+    color: var(--accent);
+  }
+
+  .chip-pos {
+    background-color: rgba(52, 211, 153, 0.1);
+    border-color: rgba(52, 211, 153, 0.25);
+    color: var(--pos);
+  }
+
+  .chip-neg {
+    background-color: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.25);
+    color: var(--neg);
+  }
+
+  .chip-warn {
+    background-color: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.25);
+    color: var(--warn);
+  }
+
+  .chip-info {
+    background-color: rgba(167, 139, 250, 0.1);
+    border-color: rgba(167, 139, 250, 0.25);
+    color: var(--info);
+  }
+
+  /* --- tabs --- */
+  .tabbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    background-color: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+  }
+
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--r-micro);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+
+  .tab:hover {
+    color: var(--text);
+  }
+
+  .tab[data-active='true'] {
+    background-color: var(--surface-3);
+    color: var(--text);
+  }
+
+  /* --- data table --- */
+  .thead {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-faint);
+  }
+
+  .row {
+    border-bottom: 1px solid var(--line);
+    transition: background-color var(--dur) var(--ease);
+  }
+
+  .row:hover {
+    background-color: var(--surface-2);
+  }
+
+  .row:last-child {
+    border-bottom: none;
+  }
+
+  /* Status dot. Single steady ring instead of stacked ping animations. */
+  .dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    flex-shrink: 0;
+  }
+
+  .dot-live {
+    background-color: var(--pos);
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
+  }
+
+  .dot-idle {
+    background-color: var(--text-faint);
+  }
+
+  .dot-warn {
+    background-color: var(--warn);
+    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
+  }
+
+  /* Console output is the one place a true monospace earns its keep. */
+  .terminal {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    font-variant-ligatures: none;
+  }
 }
 
-.surface {
-  background: linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(12, 18, 28, 0.88));
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  backdrop-filter: blur(12px);
-}
-
-.surface-hover:hover {
-  border-color: rgba(45, 212, 191, 0.35);
-  box-shadow: 0 12px 40px -20px rgba(20, 184, 166, 0.35);
-}
-
-/* ============================================
-   LIVE MARKET TICKER
-   ============================================ */
+/* ==========================================================================
+   TICKER
+   ========================================================================== */
 .ticker-wrapper {
   overflow: hidden;
   width: 100%;
@@ -68,8 +421,8 @@
 
 .ticker-content {
   display: flex;
-  animation: ticker-scroll 40s linear infinite;
   width: max-content;
+  animation: ticker-scroll 60s linear infinite;
 }
 
 .ticker-content:hover {
@@ -77,13 +430,17 @@
 }
 
 @keyframes ticker-scroll {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
 }
 
-/* ============================================
-   SCROLLBAR
-   ============================================ */
+/* ==========================================================================
+   SCROLLBARS
+   ========================================================================== */
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
@@ -93,45 +450,35 @@
   scrollbar-width: none;
 }
 
-.overflow-y-auto::-webkit-scrollbar {
-  width: 4px;
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-.overflow-y-auto::-webkit-scrollbar-track {
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-x-auto::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.overflow-y-auto::-webkit-scrollbar-thumb {
-  background: rgba(20, 184, 166, 0.25);
-  border-radius: 100px;
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
 }
 
-.overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: rgba(20, 184, 166, 0.45);
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
-/* ============================================
-   MOTION
-   ============================================ */
-@keyframes pulse-once {
-  0% {
-    background-color: rgba(16, 185, 129, 0.12);
-    border-color: rgba(16, 185, 129, 0.28);
-  }
-  100% {
-    background-color: transparent;
-    border-color: transparent;
-  }
-}
-
-.animate-pulse-once {
-  animation: pulse-once 3s ease-out forwards;
-}
-
-@keyframes fadeInUp {
+/* ==========================================================================
+   MOTION — subtle tier only (enter 200ms, no looping decoration)
+   ========================================================================== */
+@keyframes fade-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -139,46 +486,35 @@
   }
 }
 
-.grid > div {
-  animation: fadeInUp 0.4s ease-out backwards;
+.animate-fade-up,
+.animate-brand-in {
+  animation: fade-in 200ms var(--ease) both;
 }
 
-@keyframes brand-in {
+@keyframes row-flash {
   from {
-    opacity: 0;
-    transform: translateY(18px) scale(0.98);
+    background-color: rgba(0, 210, 255, 0.1);
   }
   to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    background-color: transparent;
   }
 }
 
-.animate-brand-in {
-  animation: brand-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+.animate-pulse-once {
+  animation: row-flash 1.6s var(--ease) forwards;
 }
 
-@keyframes line-draw {
-  from { transform: scaleX(0); opacity: 0; }
-  to { transform: scaleX(1); opacity: 1; }
-}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 
-.animate-line-draw {
-  transform-origin: left;
-  animation: line-draw 0.9s ease-out 0.25s both;
-}
-
-::selection {
-  background-color: rgba(20, 184, 166, 0.35);
-  color: white;
-}
-
-.font-mono {
-  font-feature-settings: 'tnum' on, 'lnum' on;
-}
-
-@media (max-width: 640px) {
   .ticker-content {
-    animation-duration: 25s;
+    animation: none;
   }
 }

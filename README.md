@@ -60,7 +60,7 @@ The app exposes a Model Context Protocol server at **`/api/mcp`** (Streamable HT
 Setup:
 
 1. Set `COINSCOPE_ACCESS_KEY` on the server (`.env.local` or Vercel env).
-2. Open the dashboard → **Login / Connect Wallet → MCP Access Key** → paste the same key. The bot banner shows *MCP secured* when the bridge is connected.
+2. Open the dashboard → **Bot → Strategy → MCP integration**. The panel shows the ready-to-copy server URL, the access-key field and copy-paste config for Claude Code, `mcp.json` clients and stdio clients. The bot banner shows *MCP secured* once the bridge connects.
 3. Add the server to your client:
 
 ```bash
@@ -104,6 +104,14 @@ On Vercel add **Upstash Redis** from the Marketplace (free tier) so bridge state
 | `JUPITER_API_KEY` | no | Uses `lite-api.jup.ag` free tier when empty |
 | `COINSCOPE_ACCESS_KEY` | for MCP | Shared secret for `/api/mcp` and the browser bridge |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Vercel | Upstash Redis for the bridge (auto-injected by the Marketplace integration) |
+
+## Design system
+
+One font family (Manrope), one accent (`#00d2ff`), solid obsidian surfaces, 1px hairline borders and a 12px card radius.
+Tokens live on `:root` in `src/app/globals.css`; `.panel`, `.btn`, `.field`, `.chip`, `.tab`, `.row` and `.dot` are the shared
+primitives. House rules: the accent is reserved for actions, shadows appear only on hover/focus/overlays, no glassmorphism or
+gradient fills, icons are vector (Lucide) and never emoji, and motion stays in the 150-200ms range with
+`prefers-reduced-motion` honoured.
 
 ## Project structure
 

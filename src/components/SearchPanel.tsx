@@ -1,136 +1,146 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Search, Loader2, TrendingUp, TrendingDown, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Loader2, TrendingUp, TrendingDown, X } from 'lucide-react';
 import { CoinService } from '@/services/coin.service';
 import { CoinData } from '@/types/coin';
 import { useCoinStore } from '@/store/useCoinStore';
-import { CoinAvatar, ChainBadge, formatPrice } from './CoinAvatar';
+import { CoinAvatar, ChainBadge, formatPrice, formatNumber } from './CoinAvatar';
 
 export const SearchPanel: React.FC = () => {
   const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
   const [results, setResults] = useState<CoinData[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  const selectCoinDirect = useCoinStore(s => s.selectCoinDirect);
+  const selectCoinDirect = useCoinStore((s) => s.selectCoinDirect);
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 300);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => setDebounced(query.trim()), 300);
+    return () => clearTimeout(t);
   }, [query]);
 
   useEffect(() => {
-    if (!debouncedQuery) {
+    if (!debounced) {
       setResults([]);
+      setIsOpen(false);
       return;
     }
-
     let active = true;
     setIsSearching(true);
-
-    CoinService.searchCoins(debouncedQuery).then(res => {
-      if (active) {
-        setResults(res);
-        setIsSearching(false);
-        setIsOpen(true);
-      }
+    CoinService.searchCoins(debounced).then((res) => {
+      if (!active) return;
+      setResults(res);
+      setIsSearching(false);
+      setIsOpen(true);
     });
+    return () => {
+      active = false;
+    };
+  }, [debounced]);
 
-    return () => { active = false; };
-  }, [debouncedQuery]);
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setIsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setIsOpen(false);
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isOpen]);
 
-  const handleSelect = (coin: CoinData) => {
+  const select = (coin: CoinData) => {
     selectCoinDirect(coin);
-    setQuery(coin.name);
+    setQuery(coin.symbol);
     setIsOpen(false);
   };
 
-  useEffect(() => {
-    const handleClickOutside = () => setIsOpen(false);
-    if (isOpen) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
-    }
-  }, [isOpen]);
-
   return (
-    <div className="relative w-full max-w-2xl mx-auto" onClick={e => e.stopPropagation()}>
-      <div className="relative flex items-center group">
-        <Search className="absolute left-5 w-5 h-5 text-slate-400 group-focus-within:text-signal-soft transition-colors" />
+    <div ref={rootRef} className="relative w-full">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
         <input
-          type="text"
+          type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onFocus={() => query && setIsOpen(true)}
-          placeholder="Search tokens by name, symbol, or contract address..."
-          className="w-full bg-ink-850/90 border border-white/10 rounded-2xl pl-14 pr-14 py-4 text-white placeholder-slate-500 focus:outline-none focus:border-signal/45 focus:ring-2 focus:ring-signal/15 transition-all shadow-xl shadow-black/25 text-sm"
-          id="search-input"
+          onFocus={() => results.length > 0 && setIsOpen(true)}
+          placeholder="Search name, symbol or contract address"
+          aria-label="Search tokens"
+          className="field pl-9 pr-9 h-9"
         />
-        {isSearching && (
-          <Loader2 className="absolute right-5 w-5 h-5 text-signal animate-spin" />
+        {isSearching ? (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-signal animate-spin" />
+        ) : (
+          query && (
+            <button
+              type="button"
+              onClick={() => {
+                setQuery('');
+                setIsOpen(false);
+              }}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-500 hover:text-white transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )
         )}
       </div>
 
-      {isOpen && results.length > 0 && (
-        <div className="absolute top-full mt-2 w-full surface rounded-2xl shadow-2xl shadow-black/40 overflow-hidden z-50">
-          <div className="p-2 border-b border-white/8">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium px-2">
-              {results.length} results found
-            </span>
-          </div>
-          <ul className="max-h-[400px] overflow-y-auto py-1">
-            {results.map((coin) => (
-              <li key={coin.id}>
-                <button
-                  onClick={() => handleSelect(coin)}
-                  className="w-full text-left px-4 py-3 hover:bg-white/5 flex items-center justify-between transition-all focus:outline-none focus:bg-white/5 group"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <CoinAvatar
-                      imageUrl={coin.imageUrl}
-                      symbol={coin.symbol}
-                      chainId={coin.chainId}
-                      size="sm"
-                      showChain={true}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white text-sm">{coin.name}</span>
-                        <ChainBadge chainId={coin.chainId} />
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-slate-500">{coin.symbol}</span>
-                        {coin.dexId && (
-                          <span className="text-[10px] text-slate-600">on {coin.dexId}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+      {isOpen && (
+        <div className="absolute top-full mt-1.5 w-full panel overflow-hidden z-50">
+          {results.length === 0 ? (
+            <p className="px-4 py-6 text-center text-[13px] text-slate-500">No tokens found for “{debounced}”.</p>
+          ) : (
+            <ul className="max-h-[360px] overflow-y-auto" role="listbox">
+              {results.map((coin) => {
+                const up = coin.priceChange24h >= 0;
+                return (
+                  <li key={coin.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      onClick={() => select(coin)}
+                      className="row w-full text-left px-3 py-2.5 flex items-center justify-between gap-3"
+                    >
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        <CoinAvatar imageUrl={coin.imageUrl} symbol={coin.symbol} chainId={coin.chainId} size="sm" />
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-1.5">
+                            <span className="font-semibold text-white text-[13px] truncate">{coin.symbol}</span>
+                            <ChainBadge chainId={coin.chainId} />
+                          </span>
+                          <span className="block text-[11px] text-slate-500 truncate mt-0.5">
+                            {coin.name}
+                            {coin.dexId ? ` · ${coin.dexId}` : ''}
+                          </span>
+                        </span>
+                      </span>
 
-                  <div className="text-right flex items-center gap-3 shrink-0">
-                    <div>
-                      <span className="font-semibold text-white text-sm font-mono block">
-                        {formatPrice(coin.priceUsd)}
+                      <span className="text-right shrink-0">
+                        <span className="block font-mono font-semibold text-white text-[13px]">
+                          {formatPrice(coin.priceUsd)}
+                        </span>
+                        <span className={`flex items-center justify-end gap-1 text-[11px] font-mono ${up ? 'text-pos' : 'text-neg'}`}>
+                          {up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                          {up ? '+' : '−'}
+                          {Math.abs(coin.priceChange24h).toFixed(1)}% · {formatNumber(coin.fundamentals.volume24h)}
+                        </span>
                       </span>
-                      <span className={`flex items-center justify-end gap-1 text-xs font-medium ${
-                        coin.priceChange24h >= 0 ? 'text-emerald-400' : 'text-red-400'
-                      }`}>
-                        {coin.priceChange24h >= 0 ? (
-                          <TrendingUp className="w-3 h-3" />
-                        ) : (
-                          <TrendingDown className="w-3 h-3" />
-                        )}
-                        {Math.abs(coin.priceChange24h).toFixed(2)}%
-                      </span>
-                    </div>
-                    <ExternalLink className="w-3.5 h-3.5 text-slate-600 group-hover:text-signal-soft transition-colors" />
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       )}
     </div>

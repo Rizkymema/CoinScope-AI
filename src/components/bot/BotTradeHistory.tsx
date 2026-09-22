@@ -2,83 +2,104 @@
 
 import React from 'react';
 import { History, ExternalLink } from 'lucide-react';
-import { WalletService } from '@/services/wallet.service';
+import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 import { ChainBadge } from '../CoinAvatar';
 import { formatPrice } from '@/lib/formatters';
+import { WalletService } from '@/services/wallet.service';
+
+const EXIT_LABEL: Record<string, string> = {
+  TP_HIT: 'Take profit',
+  SL_HIT: 'Stop loss',
+  TRAILING_STOP: 'Trailing stop',
+  MANUAL_SELL: 'Manual',
+  AI_SELL: 'AI',
+};
 
 export const BotTradeHistory: React.FC = () => {
-  const { history } = useBotStore();
+  const { history, stats } = useBotStore(useShallow((s) => ({ history: s.history, stats: s.getStats() })));
 
   return (
-    <div className="bg-ink-900/80 border border-white/10 rounded-3xl p-6 md:p-8 backdrop-blur-xl space-y-4">
-      <h3 className="font-display text-lg font-bold text-white flex items-center gap-2">
-        <History className="w-5 h-5 text-signal-soft" />
-        Completed Auto-Trade Log ({history.length})
-      </h3>
+    <section className="panel overflow-hidden">
+      <header className="flex items-center justify-between gap-4 px-5 py-4 border-b border-line">
+        <h3 className="text-[15px] font-bold text-white flex items-center gap-2">
+          <History className="w-4 h-4 text-slate-500" />
+          Closed trades <span className="text-slate-500 font-normal">({history.length})</span>
+        </h3>
+        {history.length > 0 && (
+          <div className="flex items-center gap-4 text-xs">
+            <span className="text-slate-500">
+              Win rate <span className="text-slate-200 font-semibold font-mono">{stats.winRate.toFixed(0)}%</span>
+            </span>
+            <span className="text-slate-500">
+              Realised{' '}
+              <span className={`font-semibold font-mono ${stats.totalProfitUsd >= 0 ? 'text-pos' : 'text-neg'}`}>
+                {stats.totalProfitUsd >= 0 ? '+' : '−'}${Math.abs(stats.totalProfitUsd).toFixed(2)}
+              </span>
+            </span>
+          </div>
+        )}
+      </header>
 
       {history.length === 0 ? (
-        <div className="text-center py-16 text-slate-500 text-sm">
-          No completed trades yet. Closed positions will appear here with realized PnL details.
-        </div>
+        <p className="text-center py-16 text-[13px] text-slate-500">
+          No closed trades yet. Positions appear here with realised P&amp;L once they are sold.
+        </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+          <table className="w-full text-left text-[13px]">
             <thead>
-              <tr className="border-b border-white/10 text-slate-400 uppercase tracking-wider text-[10px]">
-                <th className="py-3 px-4">Token</th>
-                <th className="py-3 px-4">Chain</th>
-                <th className="py-3 px-4">Invested</th>
-                <th className="py-3 px-4">Buy Price</th>
-                <th className="py-3 px-4">Exit Price</th>
-                <th className="py-3 px-4">Realized PnL</th>
-                <th className="py-3 px-4">Exit Reason</th>
-                <th className="py-3 px-4">Mode</th>
+              <tr className="thead border-b border-line">
+                <th className="py-2.5 px-5 font-semibold">Token</th>
+                <th className="py-2.5 px-3 font-semibold">Chain</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Invested</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Entry</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Exit</th>
+                <th className="py-2.5 px-3 font-semibold text-right">P&amp;L</th>
+                <th className="py-2.5 px-3 font-semibold">Reason</th>
+                <th className="py-2.5 px-5 font-semibold">Mode</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody>
               {history.map((item) => {
-                const isWin = item.pnlUsd >= 0;
+                const win = item.pnlUsd >= 0;
                 return (
-                  <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3.5 px-4 font-bold text-white">
-                      ${item.coinSymbol}{' '}
-                      <span className="text-slate-400 font-normal font-sans">({item.coinName})</span>
+                  <tr key={item.id} className="row">
+                    <td className="py-3 px-5">
+                      <span className="font-semibold text-white">{item.coinSymbol}</span>
+                      <span className="text-slate-500 ml-1.5 text-xs">{item.coinName}</span>
                     </td>
-                    <td className="py-3.5 px-4">
+                    <td className="py-3 px-3">
                       <ChainBadge chainId={item.chainId} />
                     </td>
-                    <td className="py-3.5 px-4 font-mono text-slate-300">${item.amountUsd.toFixed(2)}</td>
-                    <td className="py-3.5 px-4 font-mono text-slate-400">{formatPrice(item.buyPriceUsd)}</td>
-                    <td className="py-3.5 px-4 font-mono text-white">{formatPrice(item.sellPriceUsd)}</td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`font-mono font-bold px-2 py-0.5 rounded ${
-                          isWin
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'bg-red-500/20 text-red-400'
-                        }`}
-                      >
-                        {isWin ? '+' : ''}
-                        {item.pnlPercent.toFixed(1)}% (${item.pnlUsd.toFixed(2)})
+                    <td className="py-3 px-3 text-right font-mono text-slate-300">${item.amountUsd.toFixed(2)}</td>
+                    <td className="py-3 px-3 text-right font-mono text-slate-500">{formatPrice(item.buyPriceUsd)}</td>
+                    <td className="py-3 px-3 text-right font-mono text-slate-300">{formatPrice(item.sellPriceUsd)}</td>
+                    <td className={`py-3 px-3 text-right font-mono font-bold ${win ? 'text-pos' : 'text-neg'}`}>
+                      {win ? '+' : '−'}
+                      {Math.abs(item.pnlPercent).toFixed(1)}%
+                      <span className="block text-[11px] font-normal opacity-70">
+                        {win ? '+' : '−'}${Math.abs(item.pnlUsd).toFixed(2)}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/5 text-slate-300">
-                        {item.exitReason.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.isLive ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                    <td className="py-3 px-3 text-slate-400 text-xs">{EXIT_LABEL[item.exitReason] ?? item.exitReason}</td>
+                    <td className="py-3 px-5">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className={item.isLive ? 'chip chip-neg' : 'chip chip-warn'}>
                           {item.isLive ? 'LIVE' : 'PAPER'}
                         </span>
                         {item.sellTxSignature && (
-                          <a href={WalletService.explorerUrl(item.sellTxSignature)} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-white" title="Sell tx on Solscan">
+                          <a
+                            href={WalletService.explorerUrl(item.sellTxSignature)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Sell transaction on Solscan"
+                            className="text-slate-500 hover:text-white transition-colors"
+                          >
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         )}
-                      </div>
+                      </span>
                     </td>
                   </tr>
                 );
@@ -87,6 +108,6 @@ export const BotTradeHistory: React.FC = () => {
           </table>
         </div>
       )}
-    </div>
+    </section>
   );
 };

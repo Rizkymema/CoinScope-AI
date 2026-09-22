@@ -1,113 +1,88 @@
 'use client';
 
 import React from 'react';
-import { Wallet, RotateCcw, TrendingUp, TrendingDown, Layers, Globe, Sparkles } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 
+const Stat: React.FC<{
+  label: string;
+  value: React.ReactNode;
+  hint?: React.ReactNode;
+  action?: React.ReactNode;
+  tone?: 'default' | 'pos' | 'neg';
+}> = ({ label, value, hint, action, tone = 'default' }) => (
+  <div className="px-4 py-3.5 min-w-0">
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-slate-400 truncate">{label}</span>
+      {action}
+    </div>
+    <div
+      className={`mt-1 text-[19px] font-bold font-mono leading-tight truncate ${
+        tone === 'pos' ? 'text-pos' : tone === 'neg' ? 'text-neg' : 'text-white'
+      }`}
+    >
+      {value}
+    </div>
+    {hint && <div className="mt-0.5 text-[11px] text-slate-500 truncate">{hint}</div>}
+  </div>
+);
+
 export const BotMetricsBar: React.FC = () => {
-  const { settings, walletBalance, positions, resetWallet, getStats } = useBotStore();
+  const { settings, walletBalance, positions, resetWallet, getStats } = useBotStore(
+    useShallow((s) => ({
+      settings: s.settings,
+      walletBalance: s.walletBalance,
+      positions: s.positions,
+      resetWallet: s.resetWallet,
+      getStats: s.getStats,
+    }))
+  );
+
   const stats = getStats();
-  const isPnlPositive = stats.totalProfitUsd >= 0;
+  const live = !settings.paperTrading;
+  const pnlPositive = stats.totalProfitUsd >= 0;
+
+  const platform =
+    settings.launchPlatform === 'pumpfun' ? 'Pump.fun' : settings.launchPlatform === 'dexscreener' ? 'DEX pools' : 'All sources';
 
   return (
-    <div className="mt-8 pt-6 border-t border-white/10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-      {/* Virtual / Real Wallet Balance */}
-      <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4">
-        <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-          <span className="flex items-center gap-1.5 font-medium">
-            <Wallet className="w-3.5 h-3.5 text-amber-400" />
-            {settings.phantomWalletConnected ? 'Phantom Balance' : 'Demo Balance'}
-          </span>
-          {!settings.phantomWalletConnected && (
+    <div className="panel mt-4 grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-[rgba(255,255,255,0.06)]">
+      <Stat
+        label={live ? 'Wallet balance' : 'Paper balance'}
+        value={live ? `${settings.solBalance.toFixed(3)} SOL` : `$${walletBalance.toFixed(2)}`}
+        hint={live ? 'Live on-chain funds' : 'Simulated, real prices'}
+        action={
+          !live && (
             <button
+              type="button"
               onClick={resetWallet}
-              title="Reset demo wallet balance to $1,000"
-              className="hover:text-amber-400 transition-colors"
+              title="Reset paper balance to $1,000"
+              aria-label="Reset paper balance"
+              className="p-1 -mr-1 rounded-md text-slate-500 hover:text-white hover:bg-white/5 transition-colors"
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
-          )}
-        </div>
-        <div className="text-xl font-extrabold text-white font-mono">
-          {settings.phantomWalletConnected
-            ? `${settings.solBalance.toFixed(3)} SOL`
-            : `$${walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-        </div>
-        <div className="text-[10px] text-slate-500 mt-0.5">
-          {settings.phantomWalletConnected
-            ? '⚡ Phantom Live Wallet Active'
-            : settings.paperTrading
-            ? '🧪 Paper Trading Mode'
-            : 'Live Execution'}
-        </div>
-      </div>
-
-      {/* Total Net Profit */}
-      <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4">
-        <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1.5">
-          {isPnlPositive ? (
-            <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-          ) : (
-            <TrendingDown className="w-3.5 h-3.5 text-red-400" />
-          )}
-          Total Net PnL
-        </div>
-        <div
-          className={`text-xl font-extrabold font-mono ${
-            isPnlPositive ? 'text-emerald-400' : 'text-red-400'
-          }`}
-        >
-          {isPnlPositive ? '+' : ''}
-          ${stats.totalProfitUsd.toFixed(2)}
-        </div>
-        <div className="text-[10px] text-slate-500 mt-0.5">
-          Realized & Unrealized PnL
-        </div>
-      </div>
-
-      {/* Active Positions */}
-      <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4">
-        <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-signal-soft" />
-          Active Positions
-        </div>
-        <div className="text-xl font-extrabold text-white font-mono">
-          {positions.length} / {settings.maxPositions}
-        </div>
-        <div className="text-[10px] text-slate-500 mt-0.5">Open Trade Holdings</div>
-      </div>
-
-      {/* Target Launchpad */}
-      <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4">
-        <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1.5">
-          <Globe className="w-3.5 h-3.5 text-purple-400" />
-          Target Platform
-        </div>
-        <div className="text-xl font-extrabold text-white uppercase font-mono">
-          {settings.launchPlatform === 'pumpfun'
-            ? '💊 Pump.fun'
-            : settings.launchPlatform === 'dexscreener'
-            ? '🦅 DEX Only'
-            : 'All Launchpads'}
-        </div>
-        <div className="text-[10px] text-slate-500 mt-0.5">
-          Snipe Size: ${settings.buyAmountUsd} / trade
-        </div>
-      </div>
-
-      {/* Win Rate */}
-      <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4 col-span-2 sm:col-span-1">
-        <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-          Win Rate
-        </div>
-        <div className="text-xl font-extrabold text-white font-mono">
-          {stats.winRate.toFixed(1)}%
-        </div>
-        <div className="text-[10px] text-slate-500 mt-0.5">
-          {stats.winningTrades} W / {stats.losingTrades} L ({stats.totalTrades} total)
-        </div>
-      </div>
+          )
+        }
+      />
+      <Stat
+        label="Net P&L"
+        value={`${pnlPositive ? '+' : '−'}$${Math.abs(stats.totalProfitUsd).toFixed(2)}`}
+        hint="Realised + open"
+        tone={pnlPositive ? 'pos' : 'neg'}
+      />
+      <Stat
+        label="Open positions"
+        value={`${positions.length} / ${settings.maxPositions}`}
+        hint={settings.autoSell ? `TP +${settings.takeProfitPercent}% · SL −${settings.stopLossPercent}%` : 'Auto-sell off'}
+      />
+      <Stat label="Win rate" value={`${stats.winRate.toFixed(0)}%`} hint={`${stats.winningTrades}W · ${stats.losingTrades}L`} />
+      <Stat
+        label="Scanning"
+        value={platform}
+        hint={settings.targetChain === 'all' ? 'All chains' : `${settings.targetChain} only`}
+      />
     </div>
   );
 };

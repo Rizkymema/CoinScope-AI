@@ -1,174 +1,127 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Megaphone, TrendingUp, TrendingDown } from 'lucide-react';
 import { CoinData } from '@/types/coin';
 import { CoinService } from '@/services/coin.service';
 import { useCoinStore } from '@/store/useCoinStore';
-import { CoinAvatar, ChainBadge, formatPrice } from './CoinAvatar';
-import { ChevronLeft, ChevronRight, Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
+import { CoinAvatar, ChainBadge, formatPrice, formatNumber } from './CoinAvatar';
 
+/**
+ * Horizontal strip of boosted tokens.
+ * Deliberately not an auto-rotating carousel: content that moves on its own while
+ * you are reading it is hostile, and duplicating entries to fill the row is dishonest.
+ */
 export const FeaturedCoinsCarousel: React.FC = () => {
   const [coins, setCoins] = useState<CoinData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const selectCoinDirect = useCoinStore(s => s.selectCoinDirect);
+  const scroller = useRef<HTMLDivElement>(null);
+  const selectCoinDirect = useCoinStore((s) => s.selectCoinDirect);
 
   useEffect(() => {
     let mounted = true;
-    const fetchBoosted = async () => {
+    const load = async () => {
       let data = await CoinService.getBoostedTokens();
-      if (data.length === 0) {
-        data = await CoinService.getTopCoins();
-      }
-      if (mounted) {
-        setCoins(data.slice(0, 15));
-        setIsLoading(false);
-      }
+      if (data.length === 0) data = await CoinService.getTopCoins({ limit: 15 });
+      if (!mounted) return;
+      setCoins(data.slice(0, 15));
+      setIsLoading(false);
     };
-
-    fetchBoosted();
-    const intervalId = setInterval(fetchBoosted, 30000);
-
+    load();
+    const id = setInterval(load, 30_000);
     return () => {
       mounted = false;
-      clearInterval(intervalId);
+      clearInterval(id);
     };
   }, []);
 
-  useEffect(() => {
-    if (coins.length === 0) return;
-    const autoSlide = setInterval(() => {
-      setCurrentIndex(prev => (prev + 1) % Math.max(1, coins.length - 4));
-    }, 5000);
-    return () => clearInterval(autoSlide);
-  }, [coins.length]);
+  const scrollBy = (dir: -1 | 1) => {
+    scroller.current?.scrollBy({ left: dir * 320, behavior: 'smooth' });
+  };
 
-  if (isLoading || coins.length === 0) {
+  if (isLoading) {
     return (
-      <div className="w-full mb-12">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="h-7 w-48 bg-ink-800 rounded-lg animate-pulse"></div>
-            <div className="h-4 w-32 bg-ink-800/50 rounded-lg animate-pulse mt-2"></div>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {[1,2,3,4,5].map(i => (
-            <div key={i} className="surface rounded-2xl p-4 animate-pulse">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-full bg-ink-800"></div>
-                <div className="flex-1">
-                  <div className="h-4 w-16 bg-ink-800 rounded mb-1"></div>
-                  <div className="h-3 w-12 bg-ink-800/50 rounded"></div>
-                </div>
-              </div>
-              <div className="h-5 w-24 bg-ink-800 rounded mb-2"></div>
-              <div className="h-5 w-16 bg-ink-800/50 rounded"></div>
-            </div>
-          ))}
-        </div>
+      <div className="flex gap-2.5 overflow-hidden">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="panel h-[104px] w-[220px] shrink-0 animate-pulse" />
+        ))}
       </div>
     );
   }
 
-  const next = () => {
-    setCurrentIndex(prev => Math.min(prev + 1, coins.length - 5));
-  };
-
-  const prev = () => {
-    setCurrentIndex(prev => Math.max(prev - 1, 0));
-  };
-
-  const visibleCount = 5;
-  const visibleCoins = coins.slice(currentIndex, currentIndex + visibleCount);
-  while (visibleCoins.length < visibleCount && coins.length > 0) {
-    visibleCoins.push(coins[visibleCoins.length % coins.length]);
-  }
+  if (coins.length === 0) return null;
 
   return (
-    <div className="w-full mb-12">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-white flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-amber-400" />
-            Featured & Boosted
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Promoted tokens with verified profiles</p>
+    <section>
+      <div className="flex items-center justify-between gap-3 mb-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <Megaphone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+          <h2 className="text-[13px] font-bold text-white">Boosted</h2>
+          <span className="text-[11px] text-slate-500 truncate">Paid promotion on DexScreener, not an endorsement</span>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-1 mr-2">
-            {Array.from({ length: Math.max(1, coins.length - visibleCount + 1) }).slice(0, 10).map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setCurrentIndex(i)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${
-                  currentIndex === i ? 'bg-amber-400 w-4' : 'bg-slate-700 hover:bg-slate-600 w-1.5'
-                }`}
-              />
-            ))}
-          </div>
+        <div className="hidden sm:flex items-center gap-1 shrink-0">
           <button
-            onClick={prev}
-            disabled={currentIndex === 0}
-            className="p-2 hover:bg-ink-800 rounded-xl transition-all border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+            type="button"
+            onClick={() => scrollBy(-1)}
+            aria-label="Scroll left"
+            className="p-1.5 rounded-md border border-line text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
           >
-            <ChevronLeft className="w-5 h-5 text-slate-300" />
+            <ChevronLeft className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={next}
-            disabled={currentIndex >= coins.length - visibleCount}
-            className="p-2 hover:bg-ink-800 rounded-xl transition-all border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+            type="button"
+            onClick={() => scrollBy(1)}
+            aria-label="Scroll right"
+            className="p-1.5 rounded-md border border-line text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
           >
-            <ChevronRight className="w-5 h-5 text-slate-300" />
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-hidden">
-        {visibleCoins.map((coin, idx) => (
-          <div
-            key={`${coin.id}-${idx}`}
-            onClick={() => selectCoinDirect(coin)}
-            className="group relative surface rounded-2xl p-4 hover:border-amber-400/30 transition-all duration-300 cursor-pointer hover:-translate-y-1"
-          >
-            <div className="relative">
-              <div className="flex items-center gap-3 mb-4">
-                <CoinAvatar
-                  imageUrl={coin.imageUrl}
-                  symbol={coin.symbol}
-                  chainId={coin.chainId}
-                  size="lg"
-                  showChain={true}
-                />
+      <div
+        ref={scroller}
+        className="flex gap-2.5 overflow-x-auto scrollbar-hide snap-x snap-mandatory pb-1"
+        role="list"
+        aria-label="Boosted tokens"
+      >
+        {coins.map((coin) => {
+          const up = coin.priceChange24h >= 0;
+          return (
+            <button
+              key={coin.id}
+              type="button"
+              role="listitem"
+              onClick={() => selectCoinDirect(coin)}
+              className="panel-interactive shrink-0 w-[220px] p-3.5 text-left snap-start"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <CoinAvatar imageUrl={coin.imageUrl} symbol={coin.symbol} chainId={coin.chainId} size="md" />
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-bold text-white text-sm truncate">{coin.symbol}</h3>
-                  <p className="text-[10px] text-slate-500 truncate">{coin.name}</p>
-                  <ChainBadge chainId={coin.chainId} className="mt-1" />
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-white text-[13px] truncate">{coin.symbol}</span>
+                    <ChainBadge chainId={coin.chainId} />
+                  </div>
+                  <p className="text-[11px] text-slate-500 truncate mt-0.5">{coin.name}</p>
                 </div>
               </div>
 
-              <div className="mb-3">
-                <p className="text-white font-bold font-mono text-lg">
-                  {formatPrice(coin.priceUsd)}
-                </p>
+              <div className="flex items-baseline justify-between gap-2 mt-3">
+                <span className="font-mono font-bold text-white text-[15px] truncate">{formatPrice(coin.priceUsd)}</span>
+                <span className={`inline-flex items-center gap-1 text-xs font-mono font-semibold shrink-0 ${up ? 'text-pos' : 'text-neg'}`}>
+                  {up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                  {up ? '+' : '−'}
+                  {Math.abs(coin.priceChange24h).toFixed(1)}%
+                </span>
               </div>
 
-              <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${
-                coin.priceChange24h >= 0
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-red-500/10 text-red-400'
-              }`}>
-                {coin.priceChange24h >= 0 ? (
-                  <TrendingUp className="w-3 h-3" />
-                ) : (
-                  <TrendingDown className="w-3 h-3" />
-                )}
-                {coin.priceChange24h >= 0 ? '+' : ''}{coin.priceChange24h.toFixed(2)}%
-              </div>
-            </div>
-          </div>
-        ))}
+              <p className="text-[11px] text-slate-500 mt-1.5 font-mono">
+                Vol {formatNumber(coin.fundamentals.volume24h)}
+              </p>
+            </button>
+          );
+        })}
       </div>
-    </div>
+    </section>
   );
 };
