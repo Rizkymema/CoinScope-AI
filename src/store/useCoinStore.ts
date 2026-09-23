@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { CoinData, CoinAnalysis } from '../types/coin';
 import { AIService } from '../services/ai.service';
+import { wsService } from '../services/websocket.service';
+import { useBotStore } from './useBotStore';
 
 interface AppState {
   selectedCoin: CoinData | null;
@@ -24,7 +26,25 @@ export const useCoinStore = create<AppState>((set, get) => ({
   aiNote: null,
 
   selectCoinDirect: (coin: CoinData) => {
+    const previous = get().selectedCoin;
     set({ selectedCoin: coin, aiAnalysis: null, aiError: null, aiSource: null, aiNote: null });
+
+    // Follow this token's trades so its chart keeps ticking, and stop following the last one
+    // unless the bot still holds it.
+    const mintOf = (c: CoinData) => c.mint || (c.id.includes(':') ? c.id.split(':')[1] : '');
+    if ((coin.chainId || '').toLowerCase() === 'solana') {
+      const mint = mintOf(coin);
+      if (mint) {
+        wsService.connect();
+        wsService.subscribeTokenTrades([mint]);
+      }
+    }
+    if (previous && previous.id !== coin.id && (previous.chainId || '').toLowerCase() === 'solana') {
+      const prevMint = mintOf(previous);
+      const stillHeld = useBotStore.getState().positions.some((p) => (p.mint || mintOf(p.coin)) === prevMint);
+      if (prevMint && !stillHeld) wsService.unsubscribeTokenTrades([prevMint]);
+    }
+
     get().fetchAIAnalysis(coin);
   },
 

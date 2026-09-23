@@ -11,6 +11,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
     "@solana/web3.js": "^1.98.4",
+    "lightweight-charts": "^5.2.1",
     "lucide-react": "^0.300.0",
     "mcp-handler": "^2.2.0",
     "next": "14.1.0",

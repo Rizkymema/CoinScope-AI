@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { SearchPanel } from '@/components/SearchPanel';
 import { CoinScoreCard } from '@/components/CoinScoreCard';
+import { PriceChart } from '@/components/PriceChart';
 import { InsightsPanel } from '@/components/InsightsPanel';
 import { AIJudgeChat } from '@/components/AIJudgeChat';
 import { TrendingCoinsGrid } from '@/components/TrendingCoinsGrid';
@@ -43,6 +44,9 @@ export default function DashboardPage() {
       settings: s.settings,
     }))
   );
+
+  // If the bot holds the selected token, the chart draws its entry / TP / SL levels.
+  const positionForSelected = useBotStore((s) => (selectedCoin ? s.positions.find((p) => p.coin.id === selectedCoin.id) ?? null : null));
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
   useEffect(() => {
@@ -158,9 +162,12 @@ export default function DashboardPage() {
             <FeaturedCoinsCarousel />
 
             {(selectedCoin || isAiLoading) && (
-              <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr] items-start">
-                <CoinScoreCard />
-                <InsightsPanel />
+              <div className="space-y-4">
+                {selectedCoin && <PriceChart coin={selectedCoin} position={positionForSelected} />}
+                <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr] items-start">
+                  <CoinScoreCard />
+                  <InsightsPanel />
+                </div>
               </div>
             )}
 
@@ -172,9 +179,12 @@ export default function DashboardPage() {
         {activeTab === 'new' && (
           <>
             {(selectedCoin || isAiLoading) && (
-              <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr] items-start">
-                <CoinScoreCard />
-                <InsightsPanel />
+              <div className="space-y-4">
+                {selectedCoin && <PriceChart coin={selectedCoin} position={positionForSelected} />}
+                <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr] items-start">
+                  <CoinScoreCard />
+                  <InsightsPanel />
+                </div>
               </div>
             )}
             <NewCoinsLiveFeed />

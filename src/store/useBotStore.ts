@@ -19,6 +19,7 @@ import { TradeService, DryRunResult } from '../services/trade.service';
 import { AIService } from '../services/ai.service';
 import { SolPriceService } from '../services/solprice.service';
 import { CoinService } from '../services/coin.service';
+import { recordTradeForChart } from '../services/chart.service';
 import { PumpFunService } from '../services/pumpfun.service';
 import { BridgeService } from '../services/bridge.service';
 
@@ -263,7 +264,11 @@ export const useBotStore = create<BotState>()(
           get().ingestCoins([coin], 'stream');
         });
 
-        wsService.onTokenTrade((trade) => get().applyTradeTick(trade));
+        wsService.onTokenTrade((trade) => {
+          // Tokens too new to be indexed by a chart provider get their candles built here.
+          recordTradeForChart(trade, get().solPriceUsd || SolPriceService.getCached());
+          get().applyTradeTick(trade);
+        });
 
         wsService.onMigration(({ mint }) => {
           const pos = get().positions.find((p) => (p.mint || mintOf(p.coin)) === mint);

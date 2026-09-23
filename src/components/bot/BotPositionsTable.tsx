@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
-import { Layers, Inbox, TrendingUp, TrendingDown, ExternalLink, Loader2, Brain, Pill } from 'lucide-react';
+import React, { useState } from 'react';
+import { Layers, Inbox, TrendingUp, TrendingDown, ExternalLink, Loader2, Brain, Pill, CandlestickChart } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 import { CoinAvatar, ChainBadge } from '../CoinAvatar';
 import { formatPrice, timeAgo } from '@/lib/formatters';
 import { WalletService } from '@/services/wallet.service';
+import { PriceChart } from '../PriceChart';
 
 export const BotPositionsTable: React.FC = () => {
   const { positions, settings, isActive, pendingTradeIds, closePosition, getTopSkipReason } = useBotStore(
@@ -21,6 +22,7 @@ export const BotPositionsTable: React.FC = () => {
   );
 
   const topSkip = getTopSkipReason();
+  const [openChartId, setOpenChartId] = useState<string | null>(null);
 
   return (
     <div className="lg:col-span-2 space-y-3">
@@ -164,6 +166,16 @@ export const BotPositionsTable: React.FC = () => {
                     )}
                     <button
                       type="button"
+                      onClick={() => setOpenChartId((id) => (id === pos.id ? null : pos.id))}
+                      aria-expanded={openChartId === pos.id}
+                      title="Show the chart with your entry, take-profit and stop-loss levels"
+                      className={`btn btn-sm ${openChartId === pos.id ? 'btn-secondary text-signal' : 'btn-ghost'}`}
+                    >
+                      <CandlestickChart className="w-3.5 h-3.5" />
+                      Chart
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => closePosition(pos.id, 'MANUAL_SELL', 50)}
                       disabled={busy}
                       className="btn btn-sm btn-secondary"
@@ -193,6 +205,12 @@ export const BotPositionsTable: React.FC = () => {
                   </div>
                   <span className="text-pos shrink-0">TP {formatPrice(pos.tpPriceUsd)}</span>
                 </div>
+
+                {openChartId === pos.id && (
+                  <div className="mt-3.5 animate-fade-up">
+                    <PriceChart coin={pos.coin} position={pos} height={300} />
+                  </div>
+                )}
               </article>
             );
           })}
