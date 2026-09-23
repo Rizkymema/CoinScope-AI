@@ -94,6 +94,25 @@ claude mcp add --transport http coinscope https://<your-domain>/api/mcp --header
 
 On Vercel add **Upstash Redis** from the Marketplace (free tier) so bridge state is shared across serverless instances; the env vars are injected automatically. Without it the bridge falls back to process memory, which is fine locally but unreliable on serverless.
 
+### Clients that require OAuth instead of a Bearer token
+
+Some connector forms (Google Gemini's is the one that prompted this) don't accept a pasted API
+key or Bearer token - they only offer OAuth, asking for a Client ID and Client Secret. CoinScope
+ships a minimal OAuth 2.0 `client_credentials` wrapper around the same access key:
+
+1. Set `COINSCOPE_OAUTH_CLIENT_ID` and `COINSCOPE_OAUTH_CLIENT_SECRET` on the server (any values;
+   the Settings panel displays them once both are set alongside `COINSCOPE_ACCESS_KEY`).
+2. In the client's connector form, use `Bot > Settings > MCP integration > OAuth credentials` for
+   the Client ID / Client Secret. If it asks for endpoints directly: Token URL
+   `https://<domain>/api/oauth/token`, Discovery URL
+   `https://<domain>/.well-known/oauth-authorization-server`.
+3. The token endpoint exchanges those for a Bearer token equal to `COINSCOPE_ACCESS_KEY`, so
+   `/api/mcp` needs no separate configuration - OAuth is just another door to the same secret.
+
+This is a `client_credentials` (machine-to-machine) flow only, not a full user-consent
+authorization-code flow - it has no login screen or redirect URI. If a client insists on the
+latter, it needs its own implementation.
+
 ## Environment
 
 | Variable | Required | Purpose |

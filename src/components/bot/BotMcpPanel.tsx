@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Eye, EyeOff, Loader2, Plug, RefreshCw, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { BridgeService, BridgeStatus } from '@/services/bridge.service';
 
 /** Tools the MCP server exposes, grouped for the reference list. */
@@ -61,6 +61,12 @@ const CopyButton: React.FC<{ value: string; label: string; className?: string }>
   );
 };
 
+interface OAuthCreds {
+  configured: boolean;
+  clientId?: string;
+  clientSecret?: string;
+}
+
 export const BotMcpPanel: React.FC = () => {
   const [origin, setOrigin] = useState('');
   const [key, setKey] = useState('');
@@ -69,6 +75,9 @@ export const BotMcpPanel: React.FC = () => {
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [bridge, setBridge] = useState<BridgeStatus>(() => BridgeService.getStatus());
   const [snippet, setSnippet] = useState<Snippet>('mcp-json');
+  const [oauth, setOauth] = useState<OAuthCreds | null>(null);
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -76,8 +85,31 @@ export const BotMcpPanel: React.FC = () => {
     return BridgeService.onStatus(setBridge);
   }, []);
 
+  // OAuth credentials are gated behind the same access key as the bridge - fetch them once we
+  // have a key to send, and again whenever the user changes it.
+  useEffect(() => {
+    if (!key.trim()) {
+      setOauth(null);
+      return;
+    }
+    let active = true;
+    setOauthLoading(true);
+    fetch('/api/oauth/credentials', { headers: { Authorization: `Bearer ${key.trim()}` } })
+      .then((r) => (r.ok ? r.json() : { configured: false }))
+      .then((d) => active && setOauth(d))
+      .catch(() => active && setOauth(null))
+      .finally(() => active && setOauthLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [key]);
+
   const endpoint = origin ? `${origin}/api/mcp` : '/api/mcp';
   const keyForSnippet = key.trim() || 'YOUR_ACCESS_KEY';
+  const tokenEndpoint = origin ? `${origin}/api/oauth/token` : '/api/oauth/token';
+  const discoveryUrl = origin
+    ? `${origin}/.well-known/oauth-authorization-server`
+    : '/.well-known/oauth-authorization-server';
 
   const snippets: Record<Snippet, string> = useMemo(
     () => ({
@@ -232,6 +264,112 @@ export const BotMcpPanel: React.FC = () => {
             ? 'Add to the MCP config of Cursor, Windsurf or Claude Desktop, then restart the client.'
             : 'For clients that only speak stdio, mcp-remote bridges them to this HTTP endpoint.'}
         </p>
+      </div>
+
+      {/* ------------------------------------------------ OAuth (Gemini, etc.) */}
+      <div className="mt-5 pt-4 border-t border-line">
+        <h4 className="text-[13px] font-bold text-white flex items-center gap-2 mb-1">
+          <KeyRound className="w-3.5 h-3.5 text-signal" />
+          OAuth credentials
+        </h4>
+        <p className="text-[11px] text-slate-500 leading-relaxed mb-3">
+          Some clients (Google Gemini's connector form is the common one) only accept OAuth, not a
+          pasted Bearer token. Use these in its Client ID / Client Secret fields - they unlock the
+          exact same access as the key above, just through an OAuth handshake instead of a header.
+        </p>
+
+        {!key.trim() ? (
+          <p className="text-[11px] text-slate-500">Enter and save the access key above first.</p>
+        ) : oauthLoading ? (
+          <p className="flex items-center gap-2 text-[11px] text-slate-500">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading OAuth credentials…
+          </p>
+        ) : !oauth?.configured ? (
+          <p className="text-[11px] text-warn flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+            OAuth is not set up on the server yet (needs COINSCOPE_OAUTH_CLIENT_ID and
+            COINSCOPE_OAUTH_CLIENT_SECRET), or the access key above hasn't been saved correctly.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <label className="label" htmlFor="mcp-oauth-client-id">
+                Client ID
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="mcp-oauth-client-id"
+                  readOnly
+                  value={oauth.clientId}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="field font-mono text-xs"
+                />
+                <CopyButton value={oauth.clientId || ''} label="Copy client ID" className="shrink-0" />
+              </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="mcp-oauth-client-secret">
+                Client secret
+              </label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="mcp-oauth-client-secret"
+                    readOnly
+                    type={showSecret ? 'text' : 'password'}
+                    value={oauth.clientSecret}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="field font-mono text-xs pr-9"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    aria-label={showSecret ? 'Hide client secret' : 'Show client secret'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-500 hover:text-white transition-colors"
+                  >
+                    {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <CopyButton value={oauth.clientSecret || ''} label="Copy client secret" className="shrink-0" />
+              </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="mcp-oauth-token-url">
+                Token URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="mcp-oauth-token-url"
+                  readOnly
+                  value={tokenEndpoint}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="field font-mono text-xs"
+                />
+                <CopyButton value={tokenEndpoint} label="Copy token URL" className="shrink-0" />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5">Only needed if the form asks for it directly.</p>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="mcp-oauth-discovery-url">
+                Discovery URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="mcp-oauth-discovery-url"
+                  readOnly
+                  value={discoveryUrl}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="field font-mono text-xs"
+                />
+                <CopyButton value={discoveryUrl} label="Copy discovery URL" className="shrink-0" />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5">Most OAuth clients find the token URL from this automatically.</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ------------------------------------------------ requirements */}
