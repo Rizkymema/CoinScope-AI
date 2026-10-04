@@ -67,6 +67,8 @@ const BOT_TOOLS: Anthropic.Tool[] = [
         takeProfitPercent: { type: 'number', minimum: 5, maximum: 2000 },
         stopLossPercent: { type: 'number', minimum: 5, maximum: 95 },
         trailingStopPercent: { type: 'number', minimum: 0, maximum: 90 },
+        profitLockTriggerPercent: { type: 'number', minimum: 0, maximum: 1000, description: 'Once a position is up this %, raise its stop above cost. 0 = off.' },
+        profitLockPercent: { type: 'number', minimum: 0, maximum: 500, description: 'Profit the raised stop keeps, above cost (covers sell fees).' },
         minLiquidityUsd: { type: 'number', minimum: 0 },
         maxTokenAgeMinutes: { type: 'number', minimum: 0 },
         maxPositions: { type: 'integer', minimum: 1, maximum: 50 },

@@ -196,7 +196,9 @@ export const BotPositionsTable: React.FC = () => {
 
                 {/* stop-loss → take-profit range */}
                 <div className="mt-3.5 pt-3 border-t border-line flex items-center gap-3 text-[11px] font-mono">
-                  <span className="text-neg shrink-0">SL {formatPrice(pos.slPriceUsd)}</span>
+                  <span className={`shrink-0 ${pos.profitLocked ? 'text-pos' : 'text-neg'}`}>
+                    {pos.profitLocked ? 'Locked' : 'SL'} {formatPrice(pos.slPriceUsd)}
+                  </span>
                   <div className="flex-1 h-1 rounded-full bg-ink-800 overflow-hidden" role="presentation">
                     <div
                       className={`h-full rounded-full transition-[width] duration-200 ${profit ? 'bg-pos' : 'bg-neg'}`}

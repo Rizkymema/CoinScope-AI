@@ -36,6 +36,13 @@ export interface BotSettings {
   stopLossPercent: number;
   /** 0 disables the trailing stop. Otherwise the position closes when price falls X% from its high. */
   trailingStopPercent: number;
+  /**
+   * 0 disables the profit lock. Once a position has been up this many percent over its cost,
+   * its stop-loss is raised to cost + profitLockPercent so a winning trade cannot close at a loss.
+   */
+  profitLockTriggerPercent: number;
+  /** Profit the raised stop keeps, above cost. Covers the sell's fees and slippage. */
+  profitLockPercent: number;
   autoSell: boolean;
   maxPositions: number;
   slippagePercent: number;
@@ -80,6 +87,8 @@ export interface BotPosition {
   status: 'OPEN' | 'CLOSED_TP' | 'CLOSED_SL' | 'CLOSED_MANUAL';
   tpPriceUsd: number;
   slPriceUsd: number;
+  /** Set once the profit lock has raised slPriceUsd above the position's cost. */
+  profitLocked?: boolean;
   /** true when the position was opened by a real on-chain swap. */
   isLive: boolean;
   /** Solana mint address (live positions). */
@@ -119,7 +128,7 @@ export interface BotTradeHistory {
   pnlPercent: number;
   boughtAt: number;
   soldAt: number;
-  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'MANUAL_SELL' | 'AI_SELL';
+  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'PROFIT_LOCK' | 'MANUAL_SELL' | 'AI_SELL';
   isLive: boolean;
   buyTxSignature?: string;
   sellTxSignature?: string;

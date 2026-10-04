@@ -176,6 +176,8 @@ const DEFAULT_SETTINGS: BotSettings = {
   takeProfitPercent: 60,
   stopLossPercent: 25,
   trailingStopPercent: 0,
+  profitLockTriggerPercent: 30,
+  profitLockPercent: 8,
   autoSell: true,
   maxPositions: 5,
   slippagePercent: 15,
@@ -658,13 +660,13 @@ export const useBotStore = create<BotState>()(
           };
 
           if (get().settings.soundAlerts) {
-            if (exitReason === 'TP_HIT') AudioService.playTakeProfitSound();
+            if (exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK') AudioService.playTakeProfitSound();
             else if (exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP') AudioService.playStopLossSound();
           }
 
           const sign = pnlUsd >= 0 ? '+' : '';
           const label =
-            exitReason === 'TP_HIT' ? 'TAKE PROFIT' : exitReason === 'SL_HIT' ? 'STOP LOSS' : exitReason === 'TRAILING_STOP' ? 'TRAILING STOP' : exitReason === 'AI_SELL' ? 'AI SELL' : 'MANUAL SELL';
+            exitReason === 'TP_HIT' ? 'TAKE PROFIT' : exitReason === 'SL_HIT' ? 'STOP LOSS' : exitReason === 'TRAILING_STOP' ? 'TRAILING STOP' : exitReason === 'PROFIT_LOCK' ? 'PROFIT LOCK' : exitReason === 'AI_SELL' ? 'AI SELL' : 'MANUAL SELL';
 
           set((s) => ({
             walletBalance: pos.isLive ? s.walletBalance : s.walletBalance + proceedsUsd,
@@ -673,7 +675,7 @@ export const useBotStore = create<BotState>()(
             latestToastNotification: {
               title: `${label}: ${pos.coin.symbol}`,
               description: `${pct}% sold for $${proceedsUsd.toFixed(2)} (${sign}${pnlPercent.toFixed(1)}%)${sellTx ? ' - tx ' + sellTx.slice(0, 8) : ''}`,
-              type: exitReason === 'TP_HIT' ? 'sell_tp' : exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' ? 'sell_sl' : 'info',
+              type: exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK' ? 'sell_tp' : exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' ? 'sell_sl' : 'info',
               coinSymbol: pos.coin.symbol,
             },
           }));
@@ -999,18 +1001,32 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
   const pnlUsd = currentVal - pos.amountUsd;
   const pnlPercent = pos.amountUsd > 0 ? (pnlUsd / pos.amountUsd) * 100 : 0;
   const highPriceUsd = Math.max(pos.highPriceUsd, price);
+  const { settings } = store;
+
+  // Profit lock: once the position has been up the trigger %, raise its stop above cost (amountUsd
+  // includes the buy's fees) so a trade that was already winning cannot be closed at a loss.
+  let { slPriceUsd, profitLocked } = pos;
+  const costPriceUsd = pos.tokensBought > 0 ? pos.amountUsd / pos.tokensBought : pos.buyPriceUsd;
+  if (settings.profitLockTriggerPercent > 0 && highPriceUsd >= costPriceUsd * (1 + settings.profitLockTriggerPercent / 100)) {
+    const lockPercent = Math.max(0, Math.min(settings.profitLockPercent, settings.profitLockTriggerPercent));
+    const lockPriceUsd = costPriceUsd * (1 + lockPercent / 100);
+    if (lockPriceUsd > slPriceUsd) {
+      slPriceUsd = lockPriceUsd;
+      profitLocked = true;
+      store.log('info', `[PROFIT LOCK] ${pos.coin.symbol} reached +${settings.profitLockTriggerPercent}%: stop raised to $${lockPriceUsd.toPrecision(4)} (+${lockPercent}% over cost).`, { coinSymbol: pos.coin.symbol });
+    }
+  }
 
   useBotStore.setState((s) => ({
     positions: s.positions.map((p) =>
-      p.id === positionId ? { ...p, currentPriceUsd: price, pnlUsd, pnlPercent, highPriceUsd, lastPriceUpdateAt: Date.now(), priceSource: source } : p
+      p.id === positionId ? { ...p, currentPriceUsd: price, pnlUsd, pnlPercent, highPriceUsd, slPriceUsd, profitLocked, lastPriceUpdateAt: Date.now(), priceSource: source } : p
     ),
   }));
 
-  const { settings } = store;
   if (!settings.autoSell) return;
   let exit: ExitReason | null = null;
   if (price >= pos.tpPriceUsd) exit = 'TP_HIT';
-  else if (price <= pos.slPriceUsd) exit = 'SL_HIT';
+  else if (price <= slPriceUsd) exit = profitLocked ? 'PROFIT_LOCK' : 'SL_HIT';
   else if (settings.trailingStopPercent > 0 && highPriceUsd > pos.buyPriceUsd) {
     const trail = highPriceUsd * (1 - settings.trailingStopPercent / 100);
     if (price <= trail && trail > pos.buyPriceUsd) exit = 'TRAILING_STOP';

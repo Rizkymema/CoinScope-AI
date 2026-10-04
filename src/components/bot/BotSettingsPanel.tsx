@@ -441,6 +441,29 @@ export const BotSettingsPanel: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
+              <Field label="Profit lock at +%" hint="Once a position is up this much, its stop moves above cost. 0 turns it off.">
+                <input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  className="field font-mono text-pos"
+                  value={settings.profitLockTriggerPercent}
+                  onChange={(e) => updateSettings({ profitLockTriggerPercent: Math.min(1000, Math.max(0, Number(e.target.value))) })}
+                />
+              </Field>
+              <Field label="Locked profit %" hint="Profit the raised stop keeps, so the sell's fees still leave you green.">
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  className="field font-mono"
+                  value={settings.profitLockPercent}
+                  onChange={(e) => updateSettings({ profitLockPercent: Math.min(500, Math.max(0, Number(e.target.value))) })}
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <Field label="Slippage %">
                 <input
                   type="number"

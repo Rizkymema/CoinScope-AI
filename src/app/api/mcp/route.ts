@@ -145,6 +145,8 @@ const handler = createMcpHandler(
           takeProfitPercent: z.number().min(5).max(2000).optional(),
           stopLossPercent: z.number().min(5).max(95).optional(),
           trailingStopPercent: z.number().min(0).max(90).optional(),
+          profitLockTriggerPercent: z.number().min(0).max(1000).optional().describe('Once a position is up this %, raise its stop above cost. 0 = off'),
+          profitLockPercent: z.number().min(0).max(500).optional().describe('Profit the raised stop keeps, above cost (covers sell fees)'),
           minLiquidityUsd: z.number().min(0).optional(),
           maxTokenAgeMinutes: z.number().min(0).optional(),
           maxPositions: z.number().int().min(1).max(50).optional(),
