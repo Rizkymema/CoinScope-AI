@@ -1,10 +1,25 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, Check, Loader2, Lock, ShieldCheck, AlertTriangle, Wallet, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  ExternalLink,
+  KeyRound,
+  Loader2,
+  Lock,
+  LogOut,
+  RefreshCw,
+  ShieldCheck,
+  Unlock,
+  Wallet,
+  X,
+} from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 import { WalletService, WalletProviderType } from '@/services/wallet.service';
+import { CopyButton } from '@/components/common/CopyButton';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -17,16 +32,30 @@ const WALLETS: { id: WalletProviderType; name: string; site: string }[] = [
   { id: 'solflare', name: 'Solflare', site: 'https://solflare.com/download' },
 ];
 
+const walletName = (type: WalletProviderType | null) => (type === 'solflare' ? 'Solflare' : 'Phantom');
+
+const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div className="flex items-baseline justify-between gap-4 py-2 border-b border-line last:border-b-0">
+    <span className="text-xs text-slate-500 shrink-0">{label}</span>
+    <span className="text-[13px] text-slate-200 text-right min-w-0">{children}</span>
+  </div>
+);
+
+/** Wallet dialog: connect an extension, or - once connected - show exactly which account is in use. */
 export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps) {
-  const { connectWallet, disconnectWallet, settings } = useBotStore(
+  const { connectWallet, disconnectWallet, refreshWalletBalance, settings, botWallet, solPriceUsd } = useBotStore(
     useShallow((s) => ({
       connectWallet: s.connectWallet,
       disconnectWallet: s.disconnectWallet,
+      refreshWalletBalance: s.refreshWalletBalance,
       settings: s.settings,
+      botWallet: s.botWallet,
+      solPriceUsd: s.solPriceUsd,
     }))
   );
 
   const [busy, setBusy] = useState<WalletProviderType | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installed, setInstalled] = useState<WalletProviderType[]>([]);
 
@@ -34,8 +63,9 @@ export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps)
     if (isOpen) {
       setInstalled(WalletService.getInstalledWallets());
       setError(null);
+      refreshWalletBalance();
     }
-  }, [isOpen]);
+  }, [isOpen, refreshWalletBalance]);
 
   // Close on Escape.
   useEffect(() => {
@@ -47,7 +77,8 @@ export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps)
 
   if (!isOpen) return null;
 
-  const connected = settings.phantomWalletConnected && settings.connectedWalletAddress;
+  const address = settings.phantomWalletConnected ? settings.connectedWalletAddress : null;
+  const signsLive = settings.liveSigner === 'wallet';
 
   const connect = async (wallet: WalletProviderType) => {
     setBusy(wallet);
@@ -57,10 +88,15 @@ export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps)
     setBusy(null);
     if (after.phantomWalletConnected) {
       onSuccessLogin?.();
-      setTimeout(onClose, 500);
     } else {
       setError('Connection was rejected or the extension is locked. Unlock the wallet and try again.');
     }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    await refreshWalletBalance();
+    setRefreshing(false);
   };
 
   return (
@@ -83,49 +119,62 @@ export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps)
 
         <h2 id="wallet-dialog-title" className="text-[15px] font-bold text-white flex items-center gap-2">
           <Wallet className="w-4 h-4 text-signal" />
-          {connected ? 'Wallet connected' : 'Connect a wallet'}
+          {address ? 'Connected account' : 'Connect a wallet'}
         </h2>
         <p className="text-[13px] text-slate-400 mt-1.5 leading-relaxed">
-          {connected
-            ? 'The bot signs every trade through this wallet. Nothing leaves your browser without a signing prompt.'
+          {address
+            ? signsLive
+              ? 'This account signs live trades. Each buy and sell opens an approval prompt in the extension.'
+              : 'Connected for funding and display. Live trades are signed by the bot wallet.'
             : 'Needed for live trading on Solana. Paper trading works without one. Keys never leave the extension.'}
         </p>
 
-        {connected ? (
+        {address ? (
           <>
             <div className="panel-2 p-4 mt-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[11px] text-slate-500">
-                    {settings.walletType === 'solflare' ? 'Solflare' : 'Phantom'} address
-                  </p>
-                  <p className="font-mono text-[13px] text-white truncate mt-0.5">
-                    {settings.connectedWalletAddress?.slice(0, 8)}…{settings.connectedWalletAddress?.slice(-8)}
-                  </p>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-[11px] text-slate-500">Balance</p>
-                  <p className="font-mono text-[13px] text-pos font-semibold mt-0.5">{settings.solBalance.toFixed(3)} SOL</p>
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-[13px] font-semibold text-white">
+                  <span className="dot dot-live" />
+                  {walletName(settings.walletType)}
+                </span>
+                {signsLive && <span className="chip chip-accent">Signs live trades</span>}
+              </div>
+
+              <p className="label mt-3">Address</p>
+              <code className="block font-mono text-xs text-white break-all leading-relaxed">{address}</code>
+              <div className="flex items-center gap-2 mt-2">
+                <CopyButton value={address} label="Copy wallet address" />
+                <a href={WalletService.accountUrl(address)} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost">
+                  <ExternalLink className="w-3 h-3" />
+                  Solscan
+                </a>
+              </div>
+
+              <div className="mt-3">
+                <Row label="Balance">
+                  <span className="font-mono font-semibold text-pos">{settings.solBalance.toFixed(4)} SOL</span>
+                  {solPriceUsd > 0 && (
+                    <span className="font-mono text-slate-500 ml-1.5">≈ ${(settings.solBalance * solPriceUsd).toFixed(2)}</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={refresh}
+                    aria-label="Refresh balance"
+                    title="Refresh balance"
+                    className="ml-1.5 p-1 -my-1 rounded-md text-slate-500 hover:text-white hover:bg-white/5 align-middle"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+                  </button>
+                </Row>
+                <Row label="Network">Solana mainnet</Row>
+                <Row label="Mode">{settings.paperTrading ? 'Paper trading' : 'Live trading'}</Row>
               </div>
             </div>
 
-            <div className="flex gap-2 mt-4">
-              <button type="button" onClick={onClose} className="btn btn-primary flex-1">
-                <Check className="w-4 h-4" />
-                Done
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await disconnectWallet();
-                  onClose();
-                }}
-                className="btn btn-secondary"
-              >
-                Disconnect
-              </button>
-            </div>
+            <p className="text-[11px] text-slate-500 mt-3 leading-relaxed">
+              To use a different account, switch it inside {walletName(settings.walletType)} - this page follows the
+              extension automatically.
+            </p>
           </>
         ) : (
           <>
@@ -182,11 +231,52 @@ export function LoginModal({ isOpen, onClose, onSuccessLogin }: LoginModalProps)
                 {error}
               </p>
             )}
-
-            <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
-              Prefer to look around first? Close this dialog — the market feed and paper trading need no wallet at all.
-            </p>
           </>
+        )}
+
+        {/* bot wallet summary - the other account that can hold positions */}
+        {botWallet.address && (
+          <div className="panel-2 p-3.5 mt-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[13px] font-semibold text-white">
+                <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                Bot wallet
+              </span>
+              <span className={botWallet.unlocked ? 'chip chip-pos' : 'chip'}>
+                {botWallet.unlocked ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                {botWallet.unlocked ? 'Unlocked' : 'Locked'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 mt-2">
+              <code className="font-mono text-xs text-slate-300 truncate">{botWallet.address}</code>
+              <span className="font-mono text-xs text-slate-200 shrink-0">
+                {botWallet.solBalance === null ? '—' : `${botWallet.solBalance.toFixed(4)} SOL`}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              {settings.liveSigner === 'bot' ? 'Signs live trades. ' : ''}Manage it under Bot &rsaquo; Settings.
+            </p>
+          </div>
+        )}
+
+        {address && (
+          <div className="flex gap-2 mt-4">
+            <button type="button" onClick={onClose} className="btn btn-primary flex-1">
+              <Check className="w-4 h-4" />
+              Done
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await disconnectWallet();
+                onClose();
+              }}
+              className="btn btn-secondary"
+            >
+              <LogOut className="w-4 h-4" />
+              Disconnect
+            </button>
+          </div>
         )}
 
         <footer className="flex items-center justify-between gap-3 mt-5 pt-4 border-t border-line text-[11px] text-slate-500">

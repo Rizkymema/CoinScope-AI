@@ -110,7 +110,9 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
         if (store.isActive) return ok({ status: 'already running' });
         store.toggleBot(true);
         const after = useBotStore.getState();
-        return after.isActive ? ok({ status: 'started', mode: after.settings.paperTrading ? 'paper' : 'live' }) : fail('Bot did not start (live mode needs a connected wallet).');
+        return after.isActive
+          ? ok({ status: 'started', mode: after.settings.paperTrading ? 'paper' : 'live', signer: after.settings.liveSigner })
+          : fail(`Bot did not start: ${after.logs[0]?.message || 'live mode needs a ready signer, or the daily loss limit was reached.'}`);
       }
 
       case 'stop_bot': {
@@ -125,8 +127,15 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
           if (input && input[k] !== undefined && input[k] !== null) (patch as any)[k] = input[k];
         });
         if (Object.keys(patch).length === 0) return fail('No valid settings supplied.');
-        if (patch.paperTrading === false && !store.settings.phantomWalletConnected) {
-          return fail('Cannot enable live trading: no wallet connected. Ask the user to connect Phantom/Solflare first.');
+        if (patch.paperTrading === false) {
+          const ready = store.settings.liveSigner === 'bot' ? store.botWallet.unlocked : store.settings.phantomWalletConnected;
+          if (!ready) {
+            return fail(
+              store.settings.liveSigner === 'bot'
+                ? 'Cannot enable live trading: the bot wallet is locked or missing. Ask the user to unlock it under Bot > Settings.'
+                : 'Cannot enable live trading: no wallet connected. Ask the user to connect Phantom/Solflare first.'
+            );
+          }
         }
         store.updateSettings(patch);
         store.log('ai', `[AI CONTROL] Settings updated: ${JSON.stringify(patch)}`);

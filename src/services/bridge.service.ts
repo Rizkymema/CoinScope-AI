@@ -21,6 +21,9 @@ export interface BridgeStatus {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
+/** After a 401 the browser has no valid key; retry rarely instead of every sync tick. */
+let authBackoffUntil = 0;
+const AUTH_BACKOFF_MS = 60_000;
 let pendingResults: BridgeResult[] = [];
 const status: BridgeStatus = { connected: false, authRequired: false, backend: null, lastSyncAt: null, lastError: null, commandsExecuted: 0 };
 const listeners = new Set<(s: BridgeStatus) => void>();
@@ -46,6 +49,7 @@ export const BridgeService = {
       // storage unavailable
     }
     status.lastError = null;
+    authBackoffUntil = 0;
     notify();
     this.syncNow();
   },
@@ -87,7 +91,7 @@ export const BridgeService = {
   },
 
   async syncNow() {
-    if (typeof window === 'undefined' || inFlight) return;
+    if (typeof window === 'undefined' || inFlight || Date.now() < authBackoffUntil) return;
     inFlight = true;
     try {
       const store = useBotStore.getState();
@@ -135,7 +139,8 @@ export const BridgeService = {
       if (!res.ok) {
         pendingResults = [...sentResults, ...pendingResults];
         status.connected = false;
-        status.lastError = res.status === 401 ? 'Access key missing or wrong (set it via Login → Secret Key).' : data?.error || `Sync failed (${res.status})`;
+        status.lastError = res.status === 401 ? 'Access key missing or wrong (set it under Bot > Settings > MCP integration).' : data?.error || `Sync failed (${res.status})`;
+        if (res.status === 401) authBackoffUntil = Date.now() + AUTH_BACKOFF_MS;
         notify();
         return;
       }

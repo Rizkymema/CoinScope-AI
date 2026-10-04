@@ -3,10 +3,26 @@
  * Non-custodial: private keys never leave the wallet extension. We only build
  * transactions and hand them to the wallet for signing + broadcasting.
  */
-import { VersionedTransaction, Transaction } from '@solana/web3.js';
+import { PublicKey, SystemProgram, VersionedTransaction, Transaction, TransactionMessage } from '@solana/web3.js';
 
-export const DEFAULT_SOLANA_RPC =
-  process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+/**
+ * The browser talks to Solana through our own /api/rpc proxy by default. The public mainnet
+ * endpoint answers browser requests with 403, so calling it directly from the dashboard breaks
+ * balances and transaction confirmations. A custom endpoint (e.g. a Helius URL) is still used
+ * directly when configured, with the proxy as its fallback.
+ */
+export const RPC_PROXY = '/api/rpc';
+export const DEFAULT_SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || RPC_PROXY;
+
+/** Endpoints known to refuse browser traffic - silently rerouted through the proxy. */
+const BROWSER_BLOCKED = ['api.mainnet-beta.solana.com'];
+
+export function resolveRpcUrl(url?: string | null): string {
+  const u = (url || '').trim();
+  if (!u) return RPC_PROXY;
+  if (BROWSER_BLOCKED.some((h) => u.includes(h))) return RPC_PROXY;
+  return u;
+}
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export type WalletProviderType = 'phantom' | 'solflare';
@@ -55,16 +71,36 @@ function getProvider(preferred?: WalletProviderType): { provider: SolanaProvider
   return null;
 }
 
-async function rpc<T = any>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
-  const response = await fetch(rpcUrl || DEFAULT_SOLANA_RPC, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  if (!response.ok) throw new Error(`RPC ${method} failed with HTTP ${response.status}`);
-  const data = await response.json();
-  if (data?.error) throw new Error(data.error.message || `RPC ${method} error`);
+/** Network / HTTP failure, as opposed to the RPC node answering with an error about the request. */
+class RpcTransportError extends Error {}
+
+async function rpcOnce<T>(url: string, method: string, params: unknown[]): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+  } catch (err: any) {
+    throw new RpcTransportError(`RPC ${method} unreachable: ${err?.message || 'network error'}`);
+  }
+  if (!response.ok) throw new RpcTransportError(`RPC ${method} failed with HTTP ${response.status}`);
+  const data = await response.json().catch(() => null);
+  if (!data) throw new RpcTransportError(`RPC ${method} returned an unreadable body`);
+  if (data.error) throw new Error(data.error.message || `RPC ${method} error`);
   return data.result as T;
+}
+
+/** JSON-RPC call: configured endpoint first, then the server proxy if that endpoint is unreachable. */
+export async function rpc<T = any>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
+  const primary = resolveRpcUrl(rpcUrl);
+  try {
+    return await rpcOnce<T>(primary, method, params);
+  } catch (err) {
+    if (primary === RPC_PROXY || !(err instanceof RpcTransportError)) throw err;
+    return rpcOnce<T>(RPC_PROXY, method, params);
+  }
 }
 
 export const WalletService = {
@@ -209,6 +245,32 @@ export const WalletService = {
     }
   },
 
+  /** Plain SOL transfer signed in the extension - used to fund the bot wallet from Phantom. */
+  async transferSol(
+    from: string,
+    to: string,
+    amountSol: number,
+    rpcUrl = DEFAULT_SOLANA_RPC
+  ): Promise<{ success: boolean; signature?: string; message?: string }> {
+    const found = getProvider();
+    if (!found) return { success: false, message: 'Wallet not connected.' };
+    try {
+      const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
+      if (!(lamports > 0)) return { success: false, message: 'Enter an amount above 0.' };
+      const fromKey = new PublicKey(from);
+      const latest = await rpc<{ value: { blockhash: string } }>(rpcUrl, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+      const message = new TransactionMessage({
+        payerKey: fromKey,
+        recentBlockhash: latest.value.blockhash,
+        instructions: [SystemProgram.transfer({ fromPubkey: fromKey, toPubkey: new PublicKey(to), lamports })],
+      }).compileToV0Message();
+      const { signature } = await found.provider.signAndSendTransaction(new VersionedTransaction(message), { skipPreflight: false, maxRetries: 3 });
+      return { success: true, signature, message: `Sent ${amountSol} SOL.` };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Transfer was cancelled.' };
+    }
+  },
+
   /**
    * Simulates a serialized (base64) transaction on the RPC without signing it.
    * Used by the live-pipeline dry run; no funds move.
@@ -235,13 +297,20 @@ export const WalletService = {
     }
   },
 
-  /** Polls the RPC until the signature is confirmed (or errors / times out). */
+  /**
+   * Polls the RPC until the signature is confirmed, fails on-chain, or times out. The default 90s
+   * outlives a blockhash (~60-80s), so a timeout means the transaction almost certainly expired.
+   * `rebroadcast` re-submits the signed bytes every few seconds, which helps a lot when the
+   * network is congested and the first send is dropped.
+   */
   async confirmTransaction(
     signature: string,
     rpcUrl = DEFAULT_SOLANA_RPC,
-    timeoutMs = 60_000
-  ): Promise<{ confirmed: boolean; error?: string }> {
+    timeoutMs = 90_000,
+    rebroadcast?: () => Promise<void>
+  ): Promise<{ confirmed: boolean; error?: string; timedOut?: boolean }> {
     const started = Date.now();
+    let polls = 0;
     while (Date.now() - started < timeoutMs) {
       try {
         const result = await rpc<{ value: (null | { confirmationStatus?: string; err: unknown })[] }>(
@@ -251,20 +320,27 @@ export const WalletService = {
         );
         const status = result?.value?.[0];
         if (status) {
-          if (status.err) return { confirmed: false, error: JSON.stringify(status.err) };
+          if (status.err) return { confirmed: false, error: `Failed on-chain: ${JSON.stringify(status.err)}` };
           if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
             return { confirmed: true };
           }
+        } else if (rebroadcast && polls % 2 === 1 && Date.now() - started < 60_000) {
+          rebroadcast().catch(() => {});
         }
       } catch {
         // transient RPC error - keep polling
       }
+      polls++;
       await new Promise((r) => setTimeout(r, 1500));
     }
-    return { confirmed: false, error: 'Confirmation timed out' };
+    return { confirmed: false, timedOut: true, error: `Not confirmed after ${Math.round(timeoutMs / 1000)}s` };
   },
 
   explorerUrl(signature: string): string {
     return `https://solscan.io/tx/${signature}`;
+  },
+
+  accountUrl(address: string): string {
+    return `https://solscan.io/account/${address}`;
   },
 };

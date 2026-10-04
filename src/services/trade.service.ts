@@ -3,7 +3,8 @@
  *   Primary route  -> Jupiter aggregator (via /api/jupiter). Verified to route Pump.fun bonding-curve
  *                     tokens ("Pump.fun" AMM), PumpSwap, Raydium, Meteora, Orca, ...
  *   Fallback route -> PumpPortal Local Trade API (via /api/trade) for Pump.fun-family pools.
- * Transactions are built server-side, signed by the user's wallet extension, then confirmed via RPC.
+ * Transactions are built server-side, signed by a LiveSigner (the user's wallet extension, or the
+ * in-browser bot wallet for unattended trading), then confirmed via RPC.
  * `dryRunBuy` builds the exact same transaction and simulates it on the RPC without signing.
  */
 import { CoinData } from '../types/coin';
@@ -50,6 +51,15 @@ export interface DryRunResult {
   simulationError?: string;
   logs?: string[];
   attempts: { route: Route; ok: boolean; detail: string }[];
+}
+
+/** Who signs live trades: the browser extension (prompt per trade) or the bot wallet (no prompt). */
+export interface LiveSigner {
+  kind: 'wallet' | 'bot';
+  address: string;
+  /** Last known SOL balance, for the pre-trade funds check. */
+  solBalance?: number;
+  signAndSend: (serializedBase64: string) => Promise<{ success: boolean; signature?: string; message?: string; rebroadcast?: () => Promise<void> }>;
 }
 
 interface BuiltTx {
@@ -163,19 +173,29 @@ async function buildBuy(route: Route, coin: CoinData, mint: string, amountSol: n
   });
 }
 
-async function sendAndConfirm(transaction: string, rpcUrl: string): Promise<{ ok: boolean; signature?: string; error?: string }> {
-  const sent = await WalletService.signAndSendTransaction(transaction, { skipPreflight: false, maxRetries: 3 });
+async function sendAndConfirm(
+  transaction: string,
+  rpcUrl: string,
+  signer: LiveSigner
+): Promise<{ ok: boolean; signature?: string; error?: string; timedOut?: boolean }> {
+  const sent = await signer.signAndSend(transaction);
   if (!sent.success || !sent.signature) return { ok: false, error: sent.message };
-  const confirmation = await WalletService.confirmTransaction(sent.signature, rpcUrl);
-  if (!confirmation.confirmed) return { ok: false, signature: sent.signature, error: confirmation.error || 'Not confirmed' };
+  const confirmation = await WalletService.confirmTransaction(sent.signature, rpcUrl, undefined, sent.rebroadcast);
+  if (!confirmation.confirmed) {
+    return { ok: false, signature: sent.signature, error: confirmation.error || 'Not confirmed', timedOut: confirmation.timedOut };
+  }
   return { ok: true, signature: sent.signature };
 }
+
+const unconfirmedNote = (signature?: string) =>
+  signature ? ` Check it on Solscan before retrying: ${WalletService.explorerUrl(signature)}` : '';
 
 export const TradeService = {
   isPumpFamily,
 
-  /** Buys `amountUsd` worth of `coin` with SOL from the connected wallet. */
-  async executeBuy(coin: CoinData, amountUsd: number, settings: BotSettings, walletAddress: string): Promise<BuyResult> {
+  /** Buys `amountUsd` worth of `coin` with SOL from the signer's wallet. */
+  async executeBuy(coin: CoinData, amountUsd: number, settings: BotSettings, signer: LiveSigner): Promise<BuyResult> {
+    const walletAddress = signer.address;
     if ((coin.chainId || '').toLowerCase() !== 'solana') {
       return { success: false, message: `Live execution is only available on Solana (token is on ${coin.chainId || 'unknown chain'}).` };
     }
@@ -187,8 +207,10 @@ export const TradeService = {
 
     const amountSol = Number((amountUsd / solPrice).toFixed(6));
     if (amountSol < 0.001) return { success: false, message: 'Buy amount is below the 0.001 SOL minimum.' };
-    if (settings.solBalance && settings.solBalance < amountSol + 0.01) {
-      return { success: false, message: `Insufficient SOL: need ~${(amountSol + 0.01).toFixed(3)} SOL, wallet has ${settings.solBalance.toFixed(3)} SOL.` };
+    // ~0.003 SOL covers the priority fee plus rent for the new token account.
+    const needed = amountSol + Math.max(0.00001, settings.priorityFeeSol) + 0.003;
+    if (signer.solBalance !== undefined && signer.solBalance < needed) {
+      return { success: false, message: `Insufficient SOL: need ~${needed.toFixed(4)} SOL, ${signer.kind === 'bot' ? 'bot wallet' : 'wallet'} has ${signer.solBalance.toFixed(4)} SOL.` };
     }
 
     const before = await WalletService.getTokenBalance(walletAddress, mint, settings.solanaRpcUrl);
@@ -201,16 +223,25 @@ export const TradeService = {
         continue;
       }
 
-      const sent = await sendAndConfirm(built.transaction, settings.solanaRpcUrl);
-      if (!sent.ok) {
-        // A user rejection or a failed on-chain tx should not silently retry on another route.
-        return { success: false, message: `${route}: ${sent.error}`, signature: sent.signature, provider: route };
-      }
-
-      const after = await WalletService.getTokenBalance(walletAddress, mint, settings.solanaRpcUrl);
+      const sent = await sendAndConfirm(built.transaction, settings.solanaRpcUrl, signer);
+      const after = sent.ok || sent.timedOut ? await WalletService.getTokenBalance(walletAddress, mint, settings.solanaRpcUrl) : null;
       const beforeRaw = BigInt(before?.amountRaw || '0');
       const afterRaw = BigInt(after?.amountRaw || '0');
       const deltaRaw = afterRaw > beforeRaw ? afterRaw - beforeRaw : BigInt(0);
+
+      if (!sent.ok) {
+        // The confirmation poll can miss a transaction that did land. If the tokens arrived,
+        // the buy happened - recording it as failed would leave an untracked position behind.
+        if (!(sent.timedOut && deltaRaw > BigInt(0))) {
+          // A rejection or an on-chain failure must not silently retry on another route.
+          return {
+            success: false,
+            message: `${route}: ${sent.error}.${sent.timedOut ? unconfirmedNote(sent.signature) : ''}`,
+            signature: sent.signature,
+            provider: route,
+          };
+        }
+      }
       const decimals = after?.decimals ?? before?.decimals ?? 6;
       let tokensReceived = Number(deltaRaw) / 10 ** decimals;
       if (tokensReceived === 0 && built.outAmountRaw) tokensReceived = Number(built.outAmountRaw) / 10 ** decimals;
@@ -234,7 +265,8 @@ export const TradeService = {
   },
 
   /** Sells `percent` (1-100) of a live position back to SOL. */
-  async executeSell(position: BotPosition, percent: number, settings: BotSettings, walletAddress: string): Promise<SellResult> {
+  async executeSell(position: BotPosition, percent: number, settings: BotSettings, signer: LiveSigner): Promise<SellResult> {
+    const walletAddress = signer.address;
     const mint = position.mint || position.coin.mint || position.coin.id.split(':')[1];
     if (!mint) return { success: false, message: 'Token mint address is missing.' };
     const pct = Math.max(1, Math.min(100, Math.round(percent)));
@@ -279,8 +311,20 @@ export const TradeService = {
         continue;
       }
 
-      const sent = await sendAndConfirm(built.transaction, settings.solanaRpcUrl);
-      if (!sent.ok) return { success: false, message: `${route}: ${sent.error}`, signature: sent.signature, provider: route };
+      const sent = await sendAndConfirm(built.transaction, settings.solanaRpcUrl, signer);
+      if (!sent.ok) {
+        // Same late-landing check as buys: if the tokens left the wallet, the sell went through.
+        const now = sent.timedOut ? await WalletService.getTokenBalance(walletAddress, mint, settings.solanaRpcUrl) : null;
+        const landed = !!now && BigInt(now.amountRaw || '0') < heldRaw;
+        if (!landed) {
+          return {
+            success: false,
+            message: `${route}: ${sent.error}.${sent.timedOut ? unconfirmedNote(sent.signature) : ''}`,
+            signature: sent.signature,
+            provider: route,
+          };
+        }
+      }
 
       const solAfter = (await WalletService.getSolBalance(walletAddress, settings.solanaRpcUrl)) ?? solBefore;
       let solReceived = Math.max(0, solAfter - solBefore);
@@ -327,6 +371,9 @@ export const TradeService = {
       const decimals = 6;
       const expectedTokens = built.outAmountRaw ? Number(built.outAmountRaw) / 10 ** decimals : undefined;
       if (!sim.ok) {
+        if (/AccountNotFound/i.test(sim.error || '')) {
+          sim.error = `${sim.error} - the wallet ${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)} has never held SOL. Fund it, then run the test again.`;
+        }
         attempts.push({ route, ok: false, detail: `built OK, simulation failed: ${sim.error}` });
         return {
           success: false,

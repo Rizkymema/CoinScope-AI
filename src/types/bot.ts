@@ -7,6 +7,8 @@ export type LaunchPlatform = 'all' | 'pumpfun' | 'dexscreener';
 export type ScanSpeed = 'websocket' | '1s' | '3s' | '5s';
 export type ExecutionMode = 'paper' | 'live';
 export type StrategyPreset = 'conservative' | 'balanced' | 'aggressive' | 'custom';
+/** 'wallet' = Phantom/Solflare signs (one approval per trade); 'bot' = the in-browser bot wallet signs unattended. */
+export type LiveSignerKind = 'wallet' | 'bot';
 
 /** Decision returned by the AI gate (or the heuristic fallback when no API key is configured). */
 export interface AiDecision {
@@ -58,6 +60,10 @@ export interface BotSettings {
   aiAdjustTargets: boolean;
   /** Which risk preset the filters came from ('custom' once the user edits a field). */
   preset: StrategyPreset;
+  /** Which wallet signs live trades. */
+  liveSigner: LiveSignerKind;
+  /** Pause the auto-bot once today's realized loss reaches this many USD. 0 disables the limit. */
+  dailyLossLimitUsd: number;
 }
 
 export interface BotPosition {
@@ -83,6 +89,9 @@ export interface BotPosition {
   decimals?: number;
   buyTxSignature?: string;
   sellTxSignature?: string;
+  /** Live positions: the wallet that holds the tokens, so the sell is signed by the same wallet. */
+  ownerAddress?: string;
+  signerKind?: LiveSignerKind;
   aiDecision?: AiDecision;
   lastPriceUpdateAt?: number;
   priceSource?: 'pumpportal' | 'dexscreener' | 'gecko' | 'pumpfun';

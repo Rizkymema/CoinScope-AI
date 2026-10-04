@@ -4,9 +4,9 @@ Memecoin intelligence terminal with a real-time auto-snipe bot, AI trade gate / 
 
 ## Stack
 
-- Next.js 14 (App Router, route handlers for server-side proxies + AI)
+- Next.js 15 / React 19 (App Router, route handlers for server-side proxies + AI)
 - TypeScript, Tailwind CSS, Zustand (persisted), Lucide
-- `@solana/web3.js` (transaction deserialization), Phantom / Solflare wallet adapters via `window.solana`
+- `@solana/web3.js` (transactions, keypairs), Phantom / Solflare wallet adapters via `window.solana`
 - `@anthropic-ai/sdk` (Claude Opus 5 by default)
 
 ## What works
@@ -18,10 +18,13 @@ Memecoin intelligence terminal with a real-time auto-snipe bot, AI trade gate / 
 | New DEX pools on Solana / Base / ETH / BSC ... | GeckoTerminal `new_pools` + DexScreener token profiles |
 | Trending / search / quotes | DexScreener |
 | SOL/USD | DexScreener wSOL pair (Jupiter price API fallback) |
-| Wallet | Phantom or Solflare extension, live SOL + SPL balances via JSON-RPC |
+| Wallet | Phantom or Solflare extension, live SOL + SPL balances via JSON-RPC. The header and wallet dialog show which account is connected (wallet, full address, balance, Solscan link) |
+| Solana RPC | Browser calls go through `/api/rpc`, a server-side proxy with an allow-list of methods and fallback across endpoints (the public mainnet RPC refuses browser requests with 403) |
+| Bot wallet | Optional in-browser keypair that signs live trades without a wallet prompt, so auto-entry and take-profit work unattended. Encrypted with your password (PBKDF2 + AES-GCM); fund / withdraw / export from Settings |
 | Live swaps (Solana only) | Jupiter aggregator (routes Pump.fun bonding curves, PumpSwap, Raydium, ...) with PumpPortal as fallback. Tx is built server-side, **signed in the wallet**, confirmed via RPC |
 | Live pipeline dry run | Settings → *Test live pipeline*: builds the real swap for your address and runs `simulateTransaction` on the RPC. No signature, no funds |
-| Paper trading | Same real prices, virtual $1,000 balance (default mode) |
+| Paper trading | Virtual $1,000 balance. Fills come from a real Jupiter quote of the same size (price impact + venue fee + network fee), or a pool-depth model for tokens Jupiter has not indexed yet |
+| Guardrails | Daily loss limit pauses the auto-bot; failed exits back off instead of retrying every tick; a late-landing transaction is detected from the balance change instead of being reported as failed |
 | AI scorecard | `POST /api/ai/analyze` – structured JSON from Claude, heuristic fallback without a key |
 | AI trade gate | `POST /api/ai/decide` – BUY/SKIP + confidence + suggested TP/SL before every automatic buy |
 | AI copilot chat | `POST /api/ai/chat` – Claude with tools (`get_new_coins`, `snipe_token`, `sell_position`, `update_settings`, `start_bot`, ...). Tools execute in the browser against the bot store |
@@ -39,11 +42,14 @@ Open [http://localhost:3000](http://localhost:3000) → **Auto Bot** tab → *St
 
 ## Going live (real funds)
 
-1. Install Phantom or Solflare and connect it (header button or bot banner).
-2. Bot → *Pump.fun & Safety Strategy* → toggle **Live trading** (only enabled when a wallet is connected).
-3. Set a private RPC (`NEXT_PUBLIC_SOLANA_RPC_URL`) – the public endpoint is heavily rate-limited.
-4. Click **Test live pipeline (dry run)** in the same panel. It builds the real swap for your address and simulates it on the RPC; a green result means price oracle, routing, wallet address and RPC all work.
-5. Every buy/sell opens a wallet signing prompt. Nothing is sent without your signature and no private key ever leaves the extension.
+1. Run the bot on paper first and look at the results in History - paper fills include real price impact and fees.
+2. Pick who signs live trades under **Bot > Settings > Execution mode**:
+   - **Your wallet** (Phantom / Solflare): every buy and sell opens an approval prompt. Safe, but the bot cannot trade while you are away.
+   - **Bot wallet**: create one (or import a dedicated key), back up the key with *Export key*, fund it with *Fund from wallet*, keep it unlocked. Trades are signed automatically. It is a hot wallet - keep only trading money in it and *Withdraw* the rest.
+3. Set a private RPC (Helius, QuickNode, Triton) in Settings or as `SOLANA_RPC_URL` on the server. The built-in proxy falls back to public endpoints, which are rate-limited.
+4. Click **Test live pipeline** in the same panel. It builds the real swap for the signing address and simulates it on the RPC; nothing is signed.
+5. Set the **daily loss limit** and a small buy size, then toggle **Live trading** and start the bot.
+6. Keep the tab open (the page keeps the screen awake and warns before closing). The engine runs in the browser: closing the tab stops entries and exits.
 
 Live execution is Solana-only. Tokens on EVM chains are always paper-traded.
 
@@ -119,7 +125,8 @@ latter, it needs its own implementation.
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | for AI features | Claude scoring, trade gate and copilot chat (server-side only) |
 | `ANTHROPIC_MODEL` | no | Override model id (default `claude-opus-5`) |
-| `NEXT_PUBLIC_SOLANA_RPC_URL` | recommended | Balance / confirmation RPC |
+| `SOLANA_RPC_URL` | recommended | Private RPC used by the `/api/rpc` proxy and the token safety check (kept server-side) |
+| `NEXT_PUBLIC_SOLANA_RPC_URL` | no | RPC the browser calls directly instead of the proxy (exposed to the client) |
 | `JUPITER_API_KEY` | no | Uses `lite-api.jup.ag` free tier when empty |
 | `COINSCOPE_ACCESS_KEY` | for MCP | Shared secret for `/api/mcp` and the browser bridge |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Vercel | Upstash Redis for the bridge (auto-injected by the Marketplace integration) |
@@ -140,20 +147,20 @@ src/
 │   ├── api/ai/{analyze,decide,chat}/   # Claude routes
 │   ├── api/trade/                       # PumpPortal local-trade proxy (unsigned tx)
 │   ├── api/jupiter/                     # Jupiter quote + swap proxy
+│   ├── api/rpc/                         # Solana JSON-RPC proxy (allow-listed methods, endpoint fallback)
+│   ├── api/token/safety/                # on-chain mint / freeze authority check
 │   ├── api/pumpfun/latest/              # pump.fun REST proxy (CORS)
 │   ├── api/metadata/                    # IPFS token metadata resolver
 │   ├── api/mcp/                         # MCP server (Streamable HTTP) for external AI clients
 │   └── api/bridge/sync/                 # dashboard <-> server bridge used by the MCP bot tools
 ├── components/                          # UI (bot/ = dashboard panels)
-├── lib/                                 # ai-server, bot-tool-executor, bridge-store, server-data, server-auth
-├── services/                            # websocket, pumpfun, coin, trade, wallet, solprice, ai
+├── hooks/                               # useKeepAlive (wake lock + close warning while trading)
+├── lib/                                 # ai-server, bot-tool-executor, bridge-store, server-data, server-auth, solana-rpc, rate-limit
+├── services/                            # websocket, pumpfun, coin, trade, wallet, hotwallet, paperfill, solprice, ai
 ├── store/                               # Zustand stores (useBotStore is persisted)
 └── types/
 ```
 
 ## Risk notice
 
-Memecoin sniping is extremely high risk; most new tokens lose all value. The AI gate reduces obvious rugs but cannot see contract-level risks (mint authority, freeze, honeypots). Start in paper mode, use small sizes and a private RPC.
-
-
-pasword pump : @rizky2026123
+Memecoin sniping is extremely high risk; most new tokens lose all value. The AI gate and the on-chain mint/freeze-authority check reduce obvious rugs but cannot see every contract-level risk. Start in paper mode, use small sizes, a daily loss limit and a private RPC.

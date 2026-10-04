@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rpcCall } from '@/lib/solana-rpc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,6 @@ export const dynamic = 'force-dynamic';
  * Both being null is the safe state. Nothing here is inferred; it is what the chain says.
  */
 
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const TOKEN_PROGRAMS: Record<string, string> = {
   TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA: 'SPL Token',
   TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb: 'Token-2022',
@@ -31,21 +31,10 @@ export async function GET(req: NextRequest) {
   if (hit && Date.now() - hit.ts < TTL_MS) return NextResponse.json(hit.body);
 
   try {
-    const res = await fetch(RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getAccountInfo',
-        params: [mint, { encoding: 'jsonParsed', commitment: 'confirmed' }],
-      }),
-      cache: 'no-store',
-    });
-    const data = await res.json();
-    if (data?.error) return NextResponse.json({ error: data.error.message || 'RPC error' }, { status: 502 });
+    const data = await rpcCall('getAccountInfo', [mint, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    if (data.error) return NextResponse.json({ error: data.error.message || 'RPC error' }, { status: 502 });
 
-    const value = data?.result?.value;
+    const value = (data.result as any)?.value;
     const info = value?.data?.parsed?.info;
     if (!info) return NextResponse.json({ error: 'Mint account not found or not a token mint' }, { status: 404 });
 

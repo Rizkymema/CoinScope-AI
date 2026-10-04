@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Check, Eye, EyeOff, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { BridgeService, BridgeStatus } from '@/services/bridge.service';
+import { CopyButton } from '@/components/common/CopyButton';
 
 /** Tools the MCP server exposes, grouped for the reference list. */
 const TOOLS = {
@@ -26,39 +27,6 @@ const SNIPPET_LABEL: Record<Snippet, string> = {
   'claude-code': 'Claude Code',
   'mcp-json': 'mcp.json',
   stdio: 'stdio bridge',
-};
-
-const CopyButton: React.FC<{ value: string; label: string; className?: string }> = ({ value, label, className = '' }) => {
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // Clipboard API is unavailable over plain http on some browsers.
-      const el = document.createElement('textarea');
-      el.value = value;
-      el.style.position = 'fixed';
-      el.style.opacity = '0';
-      document.body.appendChild(el);
-      el.select();
-      try {
-        document.execCommand('copy');
-      } catch {
-        /* nothing else to try */
-      }
-      document.body.removeChild(el);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
-  };
-
-  return (
-    <button type="button" onClick={copy} aria-label={label} className={`btn btn-sm btn-secondary ${className}`}>
-      {copied ? <Check className="w-3 h-3 text-pos" /> : <Copy className="w-3 h-3" />}
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
 };
 
 interface OAuthCreds {

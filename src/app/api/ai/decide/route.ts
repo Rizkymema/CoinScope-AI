@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   AI_MODEL,
@@ -37,6 +38,8 @@ const DECISION_SCHEMA = {
  * Called by the bot before an automatic buy when the AI gate is enabled.
  */
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, 'ai-decide', 120, 60_000);
+  if (limited) return limited;
   let coin: Partial<CoinData>;
   let settings: Partial<BotSettings>;
   let context: Record<string, unknown> | undefined;

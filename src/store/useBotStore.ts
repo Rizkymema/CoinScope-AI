@@ -9,13 +9,16 @@ import {
   BotStats,
   BotTradeHistory,
   StrategyPreset,
+  LiveSignerKind,
   TokenTradeEvent,
 } from '../types/bot';
 import { BotService } from '../services/bot.service';
 import { wsService } from '../services/websocket.service';
 import { AudioService } from '../services/audio.service';
-import { WalletService, WalletProviderType, DEFAULT_SOLANA_RPC } from '../services/wallet.service';
-import { TradeService, DryRunResult } from '../services/trade.service';
+import { WalletService, WalletProviderType, DEFAULT_SOLANA_RPC, RPC_PROXY, resolveRpcUrl } from '../services/wallet.service';
+import { TradeService, DryRunResult, LiveSigner } from '../services/trade.service';
+import { HotWallet } from '../services/hotwallet.service';
+import { PaperFillService } from '../services/paperfill.service';
 import { AIService } from '../services/ai.service';
 import { SolPriceService } from '../services/solprice.service';
 import { CoinService } from '../services/coin.service';
@@ -55,6 +58,9 @@ interface BotState {
   /** Why candidates were rejected, newest first. Powers the "nothing is trading" hint. */
   skipReasons: { reason: string; at: number }[];
   evaluatedCount: number;
+  /** In-browser bot wallet (address is public; `unlocked` means it can sign right now). */
+  botWallet: { address: string | null; unlocked: boolean; solBalance: number | null };
+  walletDialogOpen: boolean;
 
   // lifecycle
   boot: () => void;
@@ -81,6 +87,11 @@ interface BotState {
   connectWallet: (preferred?: WalletProviderType) => Promise<void>;
   disconnectWallet: () => Promise<void>;
   refreshWalletBalance: () => Promise<void>;
+  setWalletDialogOpen: (open: boolean) => void;
+  /** Re-reads the bot wallet's lock state and balance. */
+  syncBotWallet: () => Promise<void>;
+  /** Realized P&L since local midnight for the current execution mode. */
+  getTodayRealizedPnl: () => number;
 
   // targets
   addTargetSymbol: (symbol: string) => void;
@@ -183,6 +194,20 @@ const DEFAULT_SETTINGS: BotSettings = {
   aiMinConfidence: 45,
   aiAdjustTargets: true,
   preset: 'balanced',
+  liveSigner: 'wallet',
+  dailyLossLimitUsd: 100,
+};
+
+/** Liquid Solana token used by the live-pipeline test when the scanner has nothing yet. */
+const PIPELINE_TEST_COIN: CoinData = {
+  id: 'solana:DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  name: 'Bonk',
+  symbol: 'BONK',
+  priceUsd: 0,
+  priceChange24h: 0,
+  fundamentals: { marketCap: 0, circulatingSupply: 0, volume24h: 0, tvl: 0 },
+  chainId: 'solana',
+  mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
 };
 
 const MAX_LOGS = 200;
@@ -245,6 +270,8 @@ export const useBotStore = create<BotState>()(
       isDryRunning: false,
       skipReasons: [],
       evaluatedCount: 0,
+      botWallet: { address: null, unlocked: false, solBalance: null },
+      walletDialogOpen: false,
 
       log: (type, message, extra) => {
         const entry: BotLogEntry = { id: uid(`log-${type}`), timestamp: nowTime(), type, message, ...extra };
@@ -319,6 +346,11 @@ export const useBotStore = create<BotState>()(
           get().refreshWalletBalance();
         });
 
+        HotWallet.onChange(() => {
+          get().syncBotWallet();
+        });
+        get().syncBotWallet();
+
         if (!walletTimer) {
           walletTimer = setInterval(() => get().refreshWalletBalance(), WALLET_REFRESH_MS);
         }
@@ -331,9 +363,16 @@ export const useBotStore = create<BotState>()(
         const next = active !== undefined ? active : !get().isActive;
         const { settings } = get();
 
-        if (next && !settings.paperTrading && !settings.phantomWalletConnected) {
-          get().log('warning', 'Live mode is selected but no wallet is connected. Connect a wallet or switch to paper trading.');
-          set({ latestToastNotification: { title: 'Wallet required', description: 'Connect Phantom/Solflare before starting the bot in live mode.', type: 'error' } });
+        if (next && !settings.paperTrading && !signerFor(settings.liveSigner)) {
+          const why = signerMissingMessage(settings.liveSigner);
+          get().log('warning', `Live mode cannot start: ${why}`);
+          set({ latestToastNotification: { title: 'Signer required', description: why, type: 'error' } });
+          return;
+        }
+        if (next && dailyLossReached()) {
+          const msg = `Daily loss limit reached ($${get().getTodayRealizedPnl().toFixed(2)} today, limit -$${settings.dailyLossLimitUsd}). Raise the limit in Settings or wait until tomorrow.`;
+          get().log('warning', msg);
+          set({ latestToastNotification: { title: 'Daily loss limit', description: msg, type: 'error' } });
           return;
         }
 
@@ -349,7 +388,7 @@ export const useBotStore = create<BotState>()(
         get().log(
           'info',
           next
-            ? `Auto-snipe bot STARTED (${settings.paperTrading ? 'paper trading' : 'LIVE - real funds'}${settings.aiGateEnabled ? ', AI gate on' : ''}). Listening to Pump.fun stream + new DEX pools...`
+            ? `Auto-snipe bot STARTED (${settings.paperTrading ? 'paper trading' : `LIVE - real funds, signed by ${settings.liveSigner === 'bot' ? 'the bot wallet' : 'your wallet extension'}`}${settings.aiGateEnabled ? ', AI gate on' : ''}). Listening to Pump.fun stream + new DEX pools...`
             : 'Auto-snipe bot PAUSED. Open positions are still monitored.'
         );
       },
@@ -363,7 +402,9 @@ export const useBotStore = create<BotState>()(
         if (newSettings.paperTrading !== undefined && newSettings.paperTrading !== prev.paperTrading) {
           get().log(
             newSettings.paperTrading ? 'info' : 'warning',
-            newSettings.paperTrading ? 'Switched to PAPER trading (simulated fills).' : 'Switched to LIVE trading - the bot will sign real Solana swaps with your wallet.'
+            newSettings.paperTrading
+              ? 'Switched to PAPER trading (simulated fills).'
+              : `Switched to LIVE trading - real Solana swaps signed by ${get().settings.liveSigner === 'bot' ? 'the bot wallet' : 'your wallet extension'}.`
           );
         }
         if (newSettings.solanaRpcUrl && newSettings.solanaRpcUrl !== prev.solanaRpcUrl) get().refreshWalletBalance();
@@ -430,6 +471,10 @@ export const useBotStore = create<BotState>()(
         for (const coin of incoming) {
           const state = get();
           if (!state.isActive) return;
+          if (dailyLossReached()) {
+            pauseForDailyLoss();
+            return;
+          }
           if (!coin?.id) continue;
           if (state.processedCoinIds.includes(coin.id) || state.pendingTradeIds.includes(coin.id)) continue;
           if (state.positions.some((p) => p.coin.id === coin.id)) continue;
@@ -459,8 +504,8 @@ export const useBotStore = create<BotState>()(
           }
 
           if (!settings.paperTrading) {
-            if (!settings.phantomWalletConnected || !settings.connectedWalletAddress) {
-              get().log('warning', `[LIVE] Skipped ${coin.symbol}: wallet not connected.`, { coinSymbol: coin.symbol });
+            if (!signerFor(settings.liveSigner)) {
+              get().log('warning', `[LIVE] Skipped ${coin.symbol}: ${signerMissingMessage(settings.liveSigner)}`, { coinSymbol: coin.symbol });
               continue;
             }
             if (!isSolana(coin)) {
@@ -524,7 +569,7 @@ export const useBotStore = create<BotState>()(
           return { success: false, message: `Insufficient paper balance ($${walletBalance.toFixed(2)} available, need $${amount}).` };
         }
         if (!settings.paperTrading) {
-          if (!settings.phantomWalletConnected || !settings.connectedWalletAddress) return { success: false, message: 'Connect a wallet before live trading.' };
+          if (!signerFor(settings.liveSigner)) return { success: false, message: signerMissingMessage(settings.liveSigner) };
           if (!isSolana(coin)) return { success: false, message: `Live execution supports Solana only (token is on ${coin.chainId}).` };
         }
 
@@ -549,10 +594,25 @@ export const useBotStore = create<BotState>()(
           let proceedsUsd = pos.tokensBought * (pct / 100) * sellPriceUsd;
           let sellTx: string | undefined;
 
+          if (!pos.isLive) {
+            // Paper exits pay the same price impact and fees a real sell would.
+            const fill = await PaperFillService.sell(pos.coin, pos.tokensBought * (pct / 100), sellPriceUsd, get().settings, get().solPriceUsd || SolPriceService.getCached());
+            if (fill.proceedsUsd !== undefined) {
+              proceedsUsd = fill.proceedsUsd;
+              sellPriceUsd = fill.priceUsd || sellPriceUsd;
+            }
+          }
+
           if (pos.isLive) {
-            const addr = get().settings.connectedWalletAddress;
-            if (!addr) return { success: false, message: 'Wallet not connected - cannot sell a live position.' };
-            const result = await TradeService.executeSell(pos, pct, get().settings, addr);
+            const signer = signerForAddress(pos.ownerAddress);
+            if (!signer) {
+              const msg = pos.ownerAddress
+                ? `${pos.coin.symbol} is held by ${short(pos.ownerAddress)}. ${pos.ownerAddress === get().botWallet.address ? 'Unlock the bot wallet' : 'Connect that wallet'} to sell it.`
+                : 'Connect the wallet that holds this position to sell it.';
+              get().log('warning', `[SELL BLOCKED] ${msg}`, { coinSymbol: pos.coin.symbol });
+              return { success: false, message: msg };
+            }
+            const result = await TradeService.executeSell(pos, pct, get().settings, signer);
             if (!result.success) {
               get().log('warning', `[SELL FAILED] ${pos.coin.symbol}: ${result.message}`, { coinSymbol: pos.coin.symbol, txSignature: result.signature });
               set({ latestToastNotification: { title: 'Sell failed', description: result.message, type: 'error', coinSymbol: pos.coin.symbol } });
@@ -630,6 +690,7 @@ export const useBotStore = create<BotState>()(
             if (!stillHeld) wsService.unsubscribeTokenTrades([mint]);
           }
           if (!remaining && get().positions.length === 0 && !get().isActive) wsService.disconnect();
+          if (get().isActive && dailyLossReached()) pauseForDailyLoss();
 
           return { success: true, message: `Sold ${pct}% of ${pos.coin.symbol} for $${proceedsUsd.toFixed(2)} (${sign}${pnlPercent.toFixed(1)}%).` };
         } finally {
@@ -710,8 +771,9 @@ export const useBotStore = create<BotState>()(
       dryRunLiveTrade: async (coinQuery, amountUsd) => {
         const { settings, recentCoins, positions } = get();
         const fail = (message: string): DryRunResult => ({ success: false, message, attempts: [] });
-        if (!settings.phantomWalletConnected || !settings.connectedWalletAddress) {
-          const r = fail('Connect a wallet first - the dry run builds the swap for your real address.');
+        const dryAddress = signerFor(settings.liveSigner)?.address || (settings.phantomWalletConnected ? settings.connectedWalletAddress : null) || get().botWallet.address;
+        if (!dryAddress) {
+          const r = fail('Connect a wallet or create a bot wallet first - the dry run builds the swap for a real address.');
           set({ lastDryRun: { ...r, symbol: '-', at: Date.now() }, latestToastNotification: { title: 'Dry run', description: r.message, type: 'error' } });
           return r;
         }
@@ -724,16 +786,13 @@ export const useBotStore = create<BotState>()(
             positions.find((p) => isSolana(p.coin))?.coin ||
             null;
         }
-        if (!coin) {
-          const r = fail('No Solana coin available yet - open the New Coins tab for a few seconds and retry.');
-          set({ lastDryRun: { ...r, symbol: '-', at: Date.now() } });
-          return r;
-        }
+        // Nothing streamed yet: test against a long-lived liquid token so the check never depends on timing.
+        if (!coin) coin = PIPELINE_TEST_COIN;
         const amount = amountUsd && amountUsd > 0 ? amountUsd : settings.buyAmountUsd;
         set({ isDryRunning: true });
-        get().log('tx', `[DRY RUN] Building + simulating a $${amount} buy of ${coin.symbol} for ${settings.connectedWalletAddress.slice(0, 4)}... (no signature)`, { coinSymbol: coin.symbol });
+        get().log('tx', `[DRY RUN] Building + simulating a $${amount} buy of ${coin.symbol} for ${short(dryAddress)} (no signature)`, { coinSymbol: coin.symbol });
         try {
-          const result = await TradeService.dryRunBuy(coin, amount, settings, settings.connectedWalletAddress);
+          const result = await TradeService.dryRunBuy(coin, amount, settings, dryAddress);
           set({
             lastDryRun: { ...result, symbol: coin.symbol, at: Date.now() },
             latestToastNotification: {
@@ -767,16 +826,56 @@ export const useBotStore = create<BotState>()(
       disconnectWallet: async () => {
         await WalletService.disconnect();
         set((s) => ({
-          settings: { ...s.settings, phantomWalletConnected: false, connectedWalletAddress: null, solBalance: 0, walletType: null, paperTrading: true },
+          settings: {
+            ...s.settings,
+            phantomWalletConnected: false,
+            connectedWalletAddress: null,
+            solBalance: 0,
+            walletType: null,
+            paperTrading: s.settings.liveSigner === 'bot' ? s.settings.paperTrading : true,
+          },
         }));
-        get().log('info', '[WALLET] Disconnected. Bot switched back to paper trading.');
+        get().log(
+          'info',
+          get().settings.liveSigner === 'bot' ? '[WALLET] Extension disconnected. Live trades keep using the bot wallet.' : '[WALLET] Disconnected. Bot switched back to paper trading.'
+        );
       },
 
       refreshWalletBalance: async () => {
         const { connectedWalletAddress, solanaRpcUrl, phantomWalletConnected } = get().settings;
-        if (!connectedWalletAddress || !phantomWalletConnected) return;
-        const bal = await WalletService.getSolBalance(connectedWalletAddress, solanaRpcUrl);
-        if (bal !== null) set((s) => ({ settings: { ...s.settings, solBalance: bal } }));
+        const botAddress = get().botWallet.address;
+        await Promise.all([
+          connectedWalletAddress && phantomWalletConnected
+            ? WalletService.getSolBalance(connectedWalletAddress, solanaRpcUrl).then((bal) => {
+                if (bal !== null) set((s) => ({ settings: { ...s.settings, solBalance: bal } }));
+              })
+            : null,
+          botAddress
+            ? WalletService.getSolBalance(botAddress, solanaRpcUrl).then((bal) => {
+                if (bal !== null) set((s) => ({ botWallet: { ...s.botWallet, solBalance: bal } }));
+              })
+            : null,
+        ]);
+      },
+
+      setWalletDialogOpen: (open) => set({ walletDialogOpen: open }),
+
+      syncBotWallet: async () => {
+        const address = HotWallet.address();
+        const unlocked = HotWallet.isUnlocked();
+        set((s) => ({ botWallet: { address, unlocked, solBalance: address === s.botWallet.address ? s.botWallet.solBalance : null } }));
+        if (!address) return;
+        const bal = await WalletService.getSolBalance(address, get().settings.solanaRpcUrl);
+        if (bal !== null && get().botWallet.address === address) set((s) => ({ botWallet: { ...s.botWallet, solBalance: bal } }));
+      },
+
+      getTodayRealizedPnl: () => {
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        const live = !get().settings.paperTrading;
+        return get()
+          .history.filter((h) => h.soldAt >= start.getTime() && h.isLive === live)
+          .reduce((sum, h) => sum + h.pnlUsd, 0);
       },
 
       addTargetSymbol: (symbol) => {
@@ -836,10 +935,15 @@ export const useBotStore = create<BotState>()(
           wallet: {
             connected: s.settings.phantomWalletConnected,
             address: connectedWalletAddress,
+            walletType: s.settings.walletType,
             solBalance: s.settings.solBalance,
             solPriceUsd: s.solPriceUsd,
             paperBalanceUsd: s.walletBalance,
           },
+          botWallet: { ...s.botWallet },
+          liveSigner: s.settings.liveSigner,
+          liveReady: s.settings.paperTrading ? null : !!signerFor(s.settings.liveSigner),
+          todayRealizedPnlUsd: Number(s.getTodayRealizedPnl().toFixed(2)),
           stream: { connected: s.isWsConnected, latencyMs: s.wsLatencyMs, eventsPerMinute: s.wsEventsPerMinute },
           settings: { ...rest, whitelistedSymbols },
           openPositions: s.positions.length,
@@ -867,7 +971,13 @@ export const useBotStore = create<BotState>()(
         return {
           ...current,
           ...p,
-          settings: { ...DEFAULT_SETTINGS, ...(p.settings || {}), phantomWalletConnected: false },
+          settings: {
+            ...DEFAULT_SETTINGS,
+            ...(p.settings || {}),
+            phantomWalletConnected: false,
+            // Older sessions persisted the public mainnet URL, which now refuses browser requests.
+            solanaRpcUrl: resolveRpcUrl(p.settings?.solanaRpcUrl) === RPC_PROXY ? DEFAULT_SOLANA_RPC : p.settings!.solanaRpcUrl,
+          },
           isActive: false,
         };
       },
@@ -905,7 +1015,73 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
     const trail = highPriceUsd * (1 - settings.trailingStopPercent / 100);
     if (price <= trail && trail > pos.buyPriceUsd) exit = 'TRAILING_STOP';
   }
-  if (exit) store.closePosition(positionId, exit).catch(() => {});
+  if (!exit) return;
+  // A failed exit (rejected prompt, locked wallet, RPC hiccup) retries after a pause instead of on every tick.
+  if ((exitRetryAt.get(positionId) || 0) > Date.now()) return;
+  store
+    .closePosition(positionId, exit)
+    .then((r) => {
+      if (r.success) exitRetryAt.delete(positionId);
+      else exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS);
+    })
+    .catch(() => exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS));
+}
+
+const EXIT_RETRY_MS = 20_000;
+const exitRetryAt = new Map<string, number>();
+
+const short = (address: string) => `${address.slice(0, 4)}...${address.slice(-4)}`;
+
+/** Signer for live trades of the given kind, or null when it cannot sign right now. */
+function signerFor(kind: LiveSignerKind): LiveSigner | null {
+  const s = useBotStore.getState();
+  if (kind === 'bot') {
+    const address = HotWallet.unlockedAddress();
+    if (!address) return null;
+    return {
+      kind: 'bot',
+      address,
+      solBalance: s.botWallet.solBalance ?? undefined,
+      signAndSend: (tx) => HotWallet.signAndSend(tx, useBotStore.getState().settings.solanaRpcUrl),
+    };
+  }
+  const { phantomWalletConnected, connectedWalletAddress, solBalance } = s.settings;
+  if (!phantomWalletConnected || !connectedWalletAddress) return null;
+  return {
+    kind: 'wallet',
+    address: connectedWalletAddress,
+    solBalance,
+    signAndSend: (tx) => WalletService.signAndSendTransaction(tx, { skipPreflight: false, maxRetries: 3 }),
+  };
+}
+
+/** Sells must be signed by whichever wallet holds the tokens, regardless of the current signer setting. */
+function signerForAddress(owner?: string): LiveSigner | null {
+  if (!owner) return signerFor(useBotStore.getState().settings.liveSigner);
+  const candidates = [signerFor('bot'), signerFor('wallet')];
+  return candidates.find((c) => c?.address === owner) || null;
+}
+
+function signerMissingMessage(kind: LiveSignerKind): string {
+  if (kind === 'bot') {
+    return HotWallet.hasVault() ? 'the bot wallet is locked - unlock it under Bot > Settings.' : 'no bot wallet yet - create one under Bot > Settings.';
+  }
+  return 'no wallet connected - connect Phantom or Solflare.';
+}
+
+function dailyLossReached(): boolean {
+  const s = useBotStore.getState();
+  const limit = s.settings.dailyLossLimitUsd;
+  return limit > 0 && s.getTodayRealizedPnl() <= -limit;
+}
+
+function pauseForDailyLoss() {
+  const s = useBotStore.getState();
+  if (!s.isActive) return;
+  const msg = `Daily loss limit hit: $${s.getTodayRealizedPnl().toFixed(2)} realized today (limit -$${s.settings.dailyLossLimitUsd}). Bot paused; open positions are still managed.`;
+  s.toggleBot(false);
+  s.log('warning', msg);
+  useBotStore.setState({ latestToastNotification: { title: 'Bot paused', description: msg, type: 'error' } });
 }
 
 async function openPosition(
@@ -923,10 +1099,36 @@ async function openPosition(
   let position = BotService.createPosition({ ...coin, priceUsd }, { ...settings, buyAmountUsd: amountUsd, takeProfitPercent: opts.tp, stopLossPercent: opts.sl });
   position = { ...position, isLive: live, mint: isSolana(coin) ? mintOf(coin) : undefined, aiDecision: opts.decision, priceSource: (coin.source as BotPosition['priceSource']) || undefined };
 
+  if (!live) {
+    // Paper entries pay the price impact and fees a real buy of this size would.
+    const fill = await PaperFillService.buy(coin, amountUsd, priceUsd, settings, solPrice);
+    const targets = BotService.calculateTargets(fill.priceUsd, opts.tp, opts.sl);
+    const pnlUsd = fill.tokens * priceUsd - amountUsd;
+    position = {
+      ...position,
+      buyPriceUsd: fill.priceUsd,
+      currentPriceUsd: priceUsd,
+      highPriceUsd: fill.priceUsd,
+      tokensBought: fill.tokens,
+      pnlUsd,
+      pnlPercent: amountUsd > 0 ? (pnlUsd / amountUsd) * 100 : 0,
+      tpPriceUsd: targets.tpPriceUsd,
+      slPriceUsd: targets.slPriceUsd,
+    };
+    if (Math.abs(fill.costPercent) >= 0.05) {
+      store.log('info', `[PAPER FILL] ${coin.symbol} @ $${fill.priceUsd.toPrecision(4)}: ${fill.costPercent.toFixed(2)}% over last price (${fill.source === 'jupiter' ? 'Jupiter quote' : 'pool-depth model'}, fees included).`, { coinSymbol: coin.symbol });
+    }
+  }
+
   if (live) {
-    const addr = settings.connectedWalletAddress!;
-    store.log('tx', `[LIVE BUY] Sending swap for ${coin.symbol} ($${amountUsd} ≈ ${(amountUsd / (solPrice || 1)).toFixed(4)} SOL)...`, { coinSymbol: coin.symbol });
-    const result = await TradeService.executeBuy({ ...coin, priceUsd }, amountUsd, settings, addr);
+    const signer = signerFor(settings.liveSigner);
+    if (!signer) return { success: false, message: signerMissingMessage(settings.liveSigner) };
+    store.log(
+      'tx',
+      `[LIVE BUY] Sending swap for ${coin.symbol} ($${amountUsd} ≈ ${(amountUsd / (solPrice || 1)).toFixed(4)} SOL) from ${signer.kind === 'bot' ? 'bot wallet' : 'wallet'} ${short(signer.address)}...`,
+      { coinSymbol: coin.symbol }
+    );
+    const result = await TradeService.executeBuy({ ...coin, priceUsd }, amountUsd, settings, signer);
     if (!result.success) {
       store.log('warning', `[BUY FAILED] ${coin.symbol}: ${result.message}`, { coinSymbol: coin.symbol, txSignature: result.signature });
       useBotStore.setState({ latestToastNotification: { title: 'Buy failed', description: result.message, type: 'error', coinSymbol: coin.symbol } });
@@ -944,6 +1146,8 @@ async function openPosition(
       tokenAmountRaw: result.tokenAmountRaw,
       decimals: result.decimals,
       buyTxSignature: result.signature,
+      ownerAddress: signer.address,
+      signerKind: signer.kind,
       tpPriceUsd: targets.tpPriceUsd,
       slPriceUsd: targets.slPriceUsd,
     };

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Bot, Globe, Key, TrendingUp, Wallet, X } from 'lucide-react';
+import { Activity, Bot, Globe, Key, TrendingUp, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SearchPanel } from '@/components/SearchPanel';
@@ -15,6 +15,7 @@ import { LiveMarketTicker } from '@/components/LiveMarketTicker';
 import { AutoBotDashboard } from '@/components/AutoBotDashboard';
 import { LoginModal } from '@/components/LoginModal';
 import { useBotStore } from '@/store/useBotStore';
+import { useKeepAlive } from '@/hooks/useKeepAlive';
 
 type Tab = 'trending' | 'new' | 'bot';
 
@@ -27,9 +28,19 @@ const TABS: { id: Tab; label: string; icon: typeof TrendingUp }[] = [
 export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState<FilterType>('trending');
   const [activeTab, setActiveTab] = useState<Tab>('trending');
-  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
-  const { isBotActive, isWsConnected, solPriceUsd, toast, clearToast, positionsCount, settings } = useBotStore(
+  const {
+    isBotActive,
+    isWsConnected,
+    solPriceUsd,
+    toast,
+    clearToast,
+    positionsCount,
+    hasLivePositions,
+    settings,
+    isLoginOpen,
+    setWalletDialogOpen,
+  } = useBotStore(
     useShallow((s) => ({
       isBotActive: s.isActive,
       isWsConnected: s.isWsConnected,
@@ -37,9 +48,16 @@ export default function DashboardPage() {
       toast: s.latestToastNotification,
       clearToast: s.clearToast,
       positionsCount: s.positions.length,
+      hasLivePositions: s.positions.some((p) => p.isLive),
       settings: s.settings,
+      isLoginOpen: s.walletDialogOpen,
+      setWalletDialogOpen: s.setWalletDialogOpen,
     }))
   );
+  const setIsLoginOpen = setWalletDialogOpen;
+
+  // Entries and exits run in this tab: keep the screen awake and warn before closing it.
+  useKeepAlive(isBotActive || hasLivePositions);
 
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
@@ -57,6 +75,7 @@ export default function DashboardPage() {
     settings.phantomWalletConnected && settings.connectedWalletAddress
       ? `${settings.connectedWalletAddress.slice(0, 4)}…${settings.connectedWalletAddress.slice(-4)}`
       : null;
+  const walletName = settings.walletType === 'solflare' ? 'Solflare' : 'Phantom';
 
   const toastTone =
     toast?.type === 'error' ? 'neg' : toast?.type === 'sell_sl' ? 'warn' : toast?.type === 'buy' ? 'accent' : 'pos';
@@ -112,11 +131,18 @@ export default function DashboardPage() {
               {isBotActive ? 'Bot running' : isWsConnected ? 'Streaming' : 'Offline'}
             </span>
 
-            <button type="button" onClick={() => setIsLoginOpen(true)} className="btn btn-secondary">
+            <button
+              type="button"
+              onClick={() => setIsLoginOpen(true)}
+              className="btn btn-secondary"
+              title={walletLabel ? `${walletName} connected: ${settings.connectedWalletAddress}` : 'Connect a wallet'}
+            >
               {walletLabel ? (
                 <>
-                  <Wallet className="w-3.5 h-3.5 text-signal" />
+                  <span className="dot dot-live" />
+                  <span className="hidden lg:inline text-slate-400">{walletName}</span>
                   <span className="font-mono">{walletLabel}</span>
+                  <span className="hidden md:inline font-mono text-slate-400">· {settings.solBalance.toFixed(2)} SOL</span>
                 </>
               ) : (
                 <>

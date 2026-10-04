@@ -15,8 +15,8 @@ export const BotHeaderBanner: React.FC = () => {
     wsEventsPerMinute,
     lastAiDecision,
     toggleBot,
-    connectWallet,
-    disconnectWallet,
+    setWalletDialogOpen,
+    botWallet,
   } = useBotStore(
     useShallow((s) => ({
       isActive: s.isActive,
@@ -26,8 +26,8 @@ export const BotHeaderBanner: React.FC = () => {
       wsEventsPerMinute: s.wsEventsPerMinute,
       lastAiDecision: s.lastAiDecision,
       toggleBot: s.toggleBot,
-      connectWallet: s.connectWallet,
-      disconnectWallet: s.disconnectWallet,
+      setWalletDialogOpen: s.setWalletDialogOpen,
+      botWallet: s.botWallet,
     }))
   );
 
@@ -112,11 +112,21 @@ export const BotHeaderBanner: React.FC = () => {
         <div className="flex items-center gap-2 shrink-0 w-full lg:w-auto">
           <button
             type="button"
-            onClick={() => (settings.phantomWalletConnected ? disconnectWallet() : connectWallet())}
+            onClick={() => setWalletDialogOpen(true)}
             className="btn btn-secondary flex-1 lg:flex-none"
+            title="Wallet details"
           >
             <Wallet className="w-4 h-4 text-signal" />
-            {settings.phantomWalletConnected && settings.connectedWalletAddress ? (
+            {live && settings.liveSigner === 'bot' ? (
+              botWallet.address ? (
+                <span className="font-mono">
+                  Bot {botWallet.address.slice(0, 4)}…{botWallet.address.slice(-4)} ·{' '}
+                  {botWallet.unlocked ? `${(botWallet.solBalance ?? 0).toFixed(2)} SOL` : 'locked'}
+                </span>
+              ) : (
+                'No bot wallet'
+              )
+            ) : settings.phantomWalletConnected && settings.connectedWalletAddress ? (
               <span className="font-mono">
                 {settings.connectedWalletAddress.slice(0, 4)}…{settings.connectedWalletAddress.slice(-4)} ·{' '}
                 {settings.solBalance.toFixed(2)} SOL

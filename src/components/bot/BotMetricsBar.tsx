@@ -29,8 +29,9 @@ const Stat: React.FC<{
 );
 
 export const BotMetricsBar: React.FC = () => {
-  const { settings, walletBalance, positions, resetWallet, getStats } = useBotStore(
+  const { settings, walletBalance, positions, resetWallet, getStats, botSol } = useBotStore(
     useShallow((s) => ({
+      botSol: s.botWallet.solBalance,
       settings: s.settings,
       walletBalance: s.walletBalance,
       positions: s.positions,
@@ -41,6 +42,7 @@ export const BotMetricsBar: React.FC = () => {
 
   const stats = getStats();
   const live = !settings.paperTrading;
+  const liveSol = settings.liveSigner === 'bot' ? botSol ?? 0 : settings.solBalance;
   const pnlPositive = stats.totalProfitUsd >= 0;
 
   const platform =
@@ -50,8 +52,8 @@ export const BotMetricsBar: React.FC = () => {
     <div className="panel mt-4 grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-[rgba(255,255,255,0.06)]">
       <Stat
         label={live ? 'Wallet balance' : 'Paper balance'}
-        value={live ? `${settings.solBalance.toFixed(3)} SOL` : `$${walletBalance.toFixed(2)}`}
-        hint={live ? 'Live on-chain funds' : 'Simulated, real prices'}
+        value={live ? `${liveSol.toFixed(3)} SOL` : `$${walletBalance.toFixed(2)}`}
+        hint={live ? (settings.liveSigner === 'bot' ? 'Bot wallet, on-chain' : 'Your wallet, on-chain') : 'Simulated, real prices'}
         action={
           !live && (
             <button

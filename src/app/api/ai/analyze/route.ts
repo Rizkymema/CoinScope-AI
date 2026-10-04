@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   AI_MODEL,
@@ -57,6 +58,8 @@ function heuristicAnalysis(coin: Partial<CoinData>): CoinAnalysis {
 }
 
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, 'ai-analyze', 60, 60_000);
+  if (limited) return limited;
   let coin: Partial<CoinData>;
   try {
     const body = await req.json();

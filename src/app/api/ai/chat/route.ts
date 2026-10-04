@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
 import { AI_MODEL, TRADING_SYSTEM_PROMPT, getAnthropic, hasAnthropicCredentials } from '@/lib/ai-server';
 
@@ -160,6 +161,8 @@ You are also the user's trading desk: you read live state and execute through to
 - Reply in the user's language (Indonesian when they write Indonesian; keep crypto terms like liquidity, market cap, TP/SL, bonding curve in English). Use short bullet lists for multiple coins. Format prices with sensible precision (e.g. $0.00001234, MCap $12.5K).`;
 
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, 'ai-chat', 30, 60_000);
+  if (limited) return limited;
   if (!hasAnthropicCredentials()) {
     return NextResponse.json(
       { error: 'ANTHROPIC_API_KEY is not configured on the server. Add it to .env.local to enable AI chat and control.' },
