@@ -71,8 +71,14 @@ function notify(signal: ScanSignal) {
 /* ------------------------------------------------------------------ auto-buy */
 
 const AUTO_BUY_COOLDOWN_MS = 60 * 60_000;
-/** Live auto-buys never spend more than this share of the signing wallet's SOL (micro-account rule). */
-const AUTO_BUY_MAX_WALLET_SHARE = 0.35;
+/**
+ * Live auto-buys never put more than this share of the trading capital into one token (the
+ * skill's micro-account rule: at most a third of the balance). Capital is the signing wallet plus,
+ * for the bot wallet, the connected wallet that funds it.
+ */
+const AUTO_BUY_MAX_CAPITAL_SHARE = 0.35;
+/** SOL the signing wallet must keep beyond the buy itself: token-account rent plus buy and sell fees. */
+const ENTRY_RESERVE_SOL = 0.005;
 const autoBuyAt = new Map<string, number>();
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
 
@@ -80,7 +86,8 @@ const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
  * At most one entry per scan, and only while every guard holds: the setting is on, there is room
  * under maxPositions, the daily loss limit is not hit, the signal is Ready with a passing sell-back
  * quote and reward over risk after fees, the token is not already held or pending, it was not
- * bought in the last hour, and (live) the buy is a small share of the signing wallet.
+ * bought in the last hour, and (live) the buy is a small share of the trading capital that the
+ * signing wallet can actually pay for, rent and fees included.
  */
 async function autoBuy(ready: ScanSignal[]) {
   const bot = useBotStore.getState();
@@ -105,14 +112,22 @@ async function autoBuy(ready: ScanSignal[]) {
   // Checked only once a signal would actually be bought, so an underfunded wallet is logged per
   // missed signal (at most hourly per token) instead of every scan.
   if (!settings.paperTrading) {
-    const solBalance = settings.liveSigner === 'bot' ? bot.botWallet.solBalance : settings.solBalance;
-    const walletUsd = (solBalance ?? 0) * (bot.solPriceUsd || SolPriceService.getCached());
-    if (settings.buyAmountUsd > walletUsd * AUTO_BUY_MAX_WALLET_SHARE) {
+    const solPrice = bot.solPriceUsd || SolPriceService.getCached();
+    const signerSol = (settings.liveSigner === 'bot' ? bot.botWallet.solBalance : settings.solBalance) ?? 0;
+    const funderSol = settings.liveSigner === 'bot' && settings.phantomWalletConnected ? settings.solBalance || 0 : 0;
+    const capitalUsd = (signerSol + funderSol) * solPrice;
+    const buySol = solPrice > 0 ? settings.buyAmountUsd / solPrice : Infinity;
+    const skip = (why: string) => {
       autoBuyAt.set(candidate.id, Date.now());
-      bot.log(
-        'warning',
-        `[AUTO-BUY] Skipped ${candidate.coin.symbol}: $${settings.buyAmountUsd} is over ${Math.round(AUTO_BUY_MAX_WALLET_SHARE * 100)}% of the signing wallet ($${walletUsd.toFixed(2)}). Fund the bot wallet or lower the buy size.`,
-        { coinSymbol: candidate.coin.symbol }
+      bot.log('warning', `[AUTO-BUY] Skipped ${candidate.coin.symbol}: ${why}`, { coinSymbol: candidate.coin.symbol });
+    };
+    if (settings.buyAmountUsd > capitalUsd * AUTO_BUY_MAX_CAPITAL_SHARE) {
+      skip(`$${settings.buyAmountUsd} is over ${Math.round(AUTO_BUY_MAX_CAPITAL_SHARE * 100)}% of the trading capital ($${capitalUsd.toFixed(2)}). Lower the buy size.`);
+      return;
+    }
+    if (signerSol < buySol + ENTRY_RESERVE_SOL) {
+      skip(
+        `the ${settings.liveSigner === 'bot' ? 'bot wallet' : 'wallet'} holds ${signerSol.toFixed(4)} SOL but this entry needs ~${(buySol + ENTRY_RESERVE_SOL).toFixed(4)} SOL with rent and fees. Fund it or lower the buy size.`
       );
       return;
     }

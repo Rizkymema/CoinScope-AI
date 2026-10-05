@@ -16,7 +16,7 @@ import { BotService } from '../services/bot.service';
 import { wsService } from '../services/websocket.service';
 import { AudioService } from '../services/audio.service';
 import { WalletService, WalletProviderType, DEFAULT_SOLANA_RPC, RPC_PROXY, resolveRpcUrl } from '../services/wallet.service';
-import { TradeService, DryRunResult, LiveSigner } from '../services/trade.service';
+import { TradeService, DryRunResult, LiveSigner, TOKEN_ACCOUNT_RENT_SOL } from '../services/trade.service';
 import { HotWallet } from '../services/hotwallet.service';
 import { PaperFillService } from '../services/paperfill.service';
 import { AIService } from '../services/ai.service';
@@ -634,6 +634,13 @@ export const useBotStore = create<BotState>()(
               if (sold > 0) sellPriceUsd = proceedsUsd / sold;
             }
             get().refreshWalletBalance();
+            // The bot wallet can reclaim the emptied account's rent without a prompt; Phantom users
+            // close empty accounts in Phantom instead of approving an extra transaction here.
+            if (pct >= 100 && signer.kind === 'bot') {
+              const mint = pos.mint || mintOf(pos.coin);
+              const sameMintOpen = get().positions.some((p) => p.id !== pos.id && (p.mint || mintOf(p.coin)) === mint);
+              if (mint && !sameMintOpen) void reclaimRent(pos.coin.symbol, mint, signer);
+            }
           }
 
           const soldTokens = pos.tokensBought * (pct / 100);
@@ -1048,6 +1055,22 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
       else exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS);
     })
     .catch(() => exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS));
+}
+
+/** Closes the empty token account a full sell leaves behind, returning its rent to the signer. */
+async function reclaimRent(symbol: string, mint: string, signer: LiveSigner) {
+  await new Promise((r) => setTimeout(r, 2500)); // let the sell's balance change reach 'confirmed'
+  const store = useBotStore.getState();
+  const r = await TradeService.closeEmptyTokenAccounts(signer.address, mint, store.settings.solanaRpcUrl, signer);
+  if (r.closed > 0) {
+    store.log('tx', `[RENT] Closed ${r.closed} empty ${symbol} token account(s): ~${(r.closed * TOKEN_ACCOUNT_RENT_SOL).toFixed(4)} SOL back to the wallet.`, {
+      coinSymbol: symbol,
+      txSignature: r.signature,
+    });
+    store.refreshWalletBalance();
+  } else if (r.error) {
+    store.log('warning', `[RENT] Could not close the empty ${symbol} token account: ${r.error}`, { coinSymbol: symbol, txSignature: r.signature });
+  }
 }
 
 const EXIT_RETRY_MS = 20_000;

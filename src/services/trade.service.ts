@@ -7,12 +7,19 @@
  * in-browser bot wallet for unattended trading), then confirmed via RPC.
  * `dryRunBuy` builds the exact same transaction and simulates it on the RPC without signing.
  */
+import { Buffer } from 'buffer';
+import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { CoinData } from '../types/coin';
 import { BotPosition, BotSettings } from '../types/bot';
-import { WalletService, LAMPORTS_PER_SOL } from './wallet.service';
+import { WalletService, LAMPORTS_PER_SOL, rpc } from './wallet.service';
 import { SolPriceService } from './solprice.service';
 
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+const TOKEN_PROGRAM_IDS = new Set(['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb']);
+/** SPL Token and Token-2022 share the layout: CloseAccount is instruction 9 and takes no arguments. */
+const CLOSE_ACCOUNT_IX = 9;
+/** Rent held by a basic token account; what closing one returns. */
+export const TOKEN_ACCOUNT_RENT_SOL = 0.00203928;
 const PUMP_POOLS = new Set(['pump', 'pump-amm', 'pumpfun', 'pumpswap', 'bonk', 'launchlab', 'raydium-launchlab']);
 
 type Route = 'jupiter' | 'pumpportal';
@@ -187,6 +194,49 @@ async function sendAndConfirm(
   return { ok: true, signature: sent.signature };
 }
 
+/** Token accounts for `mint` that `owner` can close now: no tokens, not frozen, no foreign close authority, no withheld fees. */
+async function closableTokenAccounts(owner: string, mint: string, rpcUrl: string): Promise<{ pubkey: string; programId: string }[]> {
+  const res = await rpc<{ value: any[] }>(rpcUrl, 'getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+  return (res?.value || [])
+    .filter((acc) => {
+      const info = acc?.account?.data?.parsed?.info;
+      const withheld = (info?.extensions || []).find((e: any) => e?.extension === 'transferFeeAmount')?.state?.withheldAmount;
+      return (
+        TOKEN_PROGRAM_IDS.has(acc?.account?.owner) &&
+        info?.owner === owner &&
+        info?.state === 'initialized' &&
+        !info?.isNative &&
+        info?.tokenAmount?.amount === '0' &&
+        (!info?.closeAuthority || info.closeAuthority === owner) &&
+        !(Number(withheld) > 0)
+      );
+    })
+    .map((acc) => ({ pubkey: String(acc.pubkey), programId: String(acc.account.owner) }));
+}
+
+/** Unsigned v0 transaction (base64) closing `accounts`; `owner` pays the fee and receives the rent. */
+export async function buildCloseAccountsTx(owner: string, accounts: { pubkey: string; programId: string }[], rpcUrl: string): Promise<string> {
+  const ownerKey = new PublicKey(owner);
+  const latest = await rpc<{ value: { blockhash: string } }>(rpcUrl, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  const message = new TransactionMessage({
+    payerKey: ownerKey,
+    recentBlockhash: latest.value.blockhash,
+    instructions: accounts.map(
+      (acc) =>
+        new TransactionInstruction({
+          programId: new PublicKey(acc.programId),
+          keys: [
+            { pubkey: new PublicKey(acc.pubkey), isSigner: false, isWritable: true },
+            { pubkey: ownerKey, isSigner: false, isWritable: true },
+            { pubkey: ownerKey, isSigner: true, isWritable: false },
+          ],
+          data: Buffer.from([CLOSE_ACCOUNT_IX]),
+        })
+    ),
+  }).compileToV0Message();
+  return Buffer.from(new VersionedTransaction(message).serialize()).toString('base64');
+}
+
 const unconfirmedNote = (signature?: string) =>
   signature ? ` Check it on Solscan before retrying: ${WalletService.explorerUrl(signature)}` : '';
 
@@ -342,6 +392,22 @@ export const TradeService = {
     }
 
     return { success: false, message: `No route could build the sell. ${errors.join(' | ')}` };
+  },
+
+  /**
+   * Swaps open a token account on the first buy (~0.002 SOL of rent) and never close it. On a $3-5
+   * position that is ~6% per trade, so after a full sell the empty account is closed and the rent
+   * returns to the signer.
+   */
+  async closeEmptyTokenAccounts(owner: string, mint: string, rpcUrl: string, signer: LiveSigner): Promise<{ closed: number; signature?: string; error?: string }> {
+    try {
+      const accounts = await closableTokenAccounts(owner, mint, rpcUrl);
+      if (accounts.length === 0) return { closed: 0 };
+      const sent = await sendAndConfirm(await buildCloseAccountsTx(owner, accounts, rpcUrl), rpcUrl, signer);
+      return sent.ok ? { closed: accounts.length, signature: sent.signature } : { closed: 0, signature: sent.signature, error: sent.error };
+    } catch (err: any) {
+      return { closed: 0, error: err?.message || 'Could not close the token account' };
+    }
   },
 
   /**
