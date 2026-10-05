@@ -89,15 +89,6 @@ async function autoBuy(ready: ScanSignal[]) {
   if (bot.positions.length >= settings.maxPositions) return;
   if (settings.dailyLossLimitUsd > 0 && bot.getTodayRealizedPnl() <= -settings.dailyLossLimitUsd) return;
 
-  if (!settings.paperTrading) {
-    const solBalance = settings.liveSigner === 'bot' ? bot.botWallet.solBalance : settings.solBalance;
-    const walletUsd = (solBalance ?? 0) * (bot.solPriceUsd || SolPriceService.getCached());
-    if (settings.buyAmountUsd > walletUsd * AUTO_BUY_MAX_WALLET_SHARE) {
-      bot.log('warning', `[AUTO-BUY] Skipped: $${settings.buyAmountUsd} is over ${Math.round(AUTO_BUY_MAX_WALLET_SHARE * 100)}% of the signing wallet ($${walletUsd.toFixed(2)}).`);
-      return;
-    }
-  }
-
   const held = new Set(bot.positions.map((p) => p.mint || p.coin.mint || p.coin.id));
   const candidate = [...ready]
     .sort((a, b) => (b.score?.total ?? 0) - (a.score?.total ?? 0))
@@ -110,6 +101,22 @@ async function autoBuy(ready: ScanSignal[]) {
         Date.now() - (autoBuyAt.get(s.id) || 0) > AUTO_BUY_COOLDOWN_MS
     );
   if (!candidate) return;
+
+  // Checked only once a signal would actually be bought, so an underfunded wallet is logged per
+  // missed signal (at most hourly per token) instead of every scan.
+  if (!settings.paperTrading) {
+    const solBalance = settings.liveSigner === 'bot' ? bot.botWallet.solBalance : settings.solBalance;
+    const walletUsd = (solBalance ?? 0) * (bot.solPriceUsd || SolPriceService.getCached());
+    if (settings.buyAmountUsd > walletUsd * AUTO_BUY_MAX_WALLET_SHARE) {
+      autoBuyAt.set(candidate.id, Date.now());
+      bot.log(
+        'warning',
+        `[AUTO-BUY] Skipped ${candidate.coin.symbol}: $${settings.buyAmountUsd} is over ${Math.round(AUTO_BUY_MAX_WALLET_SHARE * 100)}% of the signing wallet ($${walletUsd.toFixed(2)}). Fund the bot wallet or lower the buy size.`,
+        { coinSymbol: candidate.coin.symbol }
+      );
+      return;
+    }
+  }
 
   autoBuyAt.set(candidate.id, Date.now());
   const r = await bot.manualSnipeCoin(candidate.coin, settings.buyAmountUsd, `scanner auto-buy ${candidate.setup} ${candidate.score?.total}`, {
