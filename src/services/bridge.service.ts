@@ -1,14 +1,22 @@
 /**
  * Browser side of the MCP bridge.
- * Every ~2s: push a state snapshot to /api/bridge/sync, receive pending commands from external
- * AI clients (via /api/mcp), execute them against the bot store, and return the results on the next sync.
+ * Every 20s (every 2s for two minutes after a remote command): push a state snapshot to
+ * /api/bridge/sync, receive pending commands from external AI clients (via /api/mcp), execute them
+ * against the bot store, and return the results on the next sync.
  */
 import { useBotStore } from '../store/useBotStore';
 import { executeBotTool } from '../lib/bot-tool-executor';
 import type { BridgeCommand, BridgeResult } from '../lib/bridge-store';
 
 const ACCESS_KEY_STORAGE = 'coinscope_access_key';
-const SYNC_MS = 2_000;
+/**
+ * Each sync is one serverless call and two Redis commands. Every 2s around the clock that is
+ * ~2.6M Redis commands a month (Upstash Free allows 500K) and more function time than Vercel Hobby
+ * includes, so the bridge idles at 20s and only polls fast while a remote client is active.
+ */
+const IDLE_SYNC_MS = 20_000;
+const FAST_SYNC_MS = 2_000;
+const FAST_WINDOW_MS = 2 * 60_000;
 
 export interface BridgeStatus {
   connected: boolean;
@@ -21,6 +29,9 @@ export interface BridgeStatus {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
+let lastSyncStartedAt = 0;
+/** Poll fast until this time - set whenever a remote command arrives. */
+let fastUntil = 0;
 /** After a 401 the browser has no valid key; retry rarely instead of every sync tick. */
 let authBackoffUntil = 0;
 const AUTH_BACKOFF_MS = 60_000;
@@ -68,7 +79,10 @@ export const BridgeService = {
 
   start() {
     if (typeof window === 'undefined' || timer) return;
-    timer = setInterval(() => this.syncNow(), SYNC_MS);
+    timer = setInterval(() => {
+      const interval = Date.now() < fastUntil ? FAST_SYNC_MS : IDLE_SYNC_MS;
+      if (Date.now() - lastSyncStartedAt >= interval - 250) this.syncNow();
+    }, FAST_SYNC_MS);
     this.syncNow();
   },
 
@@ -93,6 +107,7 @@ export const BridgeService = {
   async syncNow() {
     if (typeof window === 'undefined' || inFlight || Date.now() < authBackoffUntil) return;
     inFlight = true;
+    lastSyncStartedAt = Date.now();
     try {
       const store = useBotStore.getState();
       const body = {
@@ -153,6 +168,8 @@ export const BridgeService = {
 
       const commands: BridgeCommand[] = Array.isArray(data?.commands) ? data.commands : [];
       if (commands.length > 0) {
+        // A remote client is active: answer its follow-up commands within seconds.
+        fastUntil = Date.now() + FAST_WINDOW_MS;
         notify();
         for (const cmd of commands) {
           const started = Date.now();

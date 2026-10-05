@@ -36,7 +36,8 @@ const STATE_KEY = 'coinscope:bridge:state';
 const QUEUE_KEY = 'coinscope:bridge:queue';
 const RESULT_PREFIX = 'coinscope:bridge:result:';
 const RESULT_TTL_SEC = 300;
-export const HEARTBEAT_STALE_MS = 20_000;
+/** Over two idle sync intervals (20s each), so one slow sync does not mark the dashboard offline. */
+export const HEARTBEAT_STALE_MS = 50_000;
 
 /* ------------------------------------------------------------------ */
 /* Memory backend                                                      */
@@ -136,8 +137,11 @@ export const BridgeStore = {
     return mem.results.get(id) || null;
   },
 
-  /** Enqueues a command and waits for the dashboard to execute it. */
-  async execute(tool: string, input: Record<string, unknown>, timeoutMs = 20_000): Promise<BridgeResult> {
+  /**
+   * Enqueues a command and waits for the dashboard to execute it. An idle dashboard picks it up on
+   * its next 20s sync, so the default wait covers that plus the tool itself.
+   */
+  async execute(tool: string, input: Record<string, unknown>, timeoutMs = 40_000): Promise<BridgeResult> {
     if (!(await this.isDashboardOnline())) {
       return {
         id: 'offline',
@@ -154,7 +158,7 @@ export const BridgeStore = {
     while (Date.now() - started < timeoutMs) {
       const r = await this.getResult(cmd.id);
       if (r) return r;
-      await new Promise((res) => setTimeout(res, 400));
+      await new Promise((res) => setTimeout(res, 1000)); // each check is a Redis command
     }
     return { id: cmd.id, ok: false, result: JSON.stringify({ error: `Timed out after ${timeoutMs / 1000}s waiting for the dashboard to execute ${tool}.` }), finishedAt: Date.now() };
   },

@@ -20,7 +20,7 @@ export const maxDuration = 60;
 
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] });
 
-async function viaBridge(tool: string, input: Record<string, unknown>, timeoutMs = 20_000) {
+async function viaBridge(tool: string, input: Record<string, unknown>, timeoutMs = 40_000) {
   const r = await BridgeStore.execute(tool, input, timeoutMs);
   let parsed: unknown = r.result;
   try {
@@ -185,7 +185,7 @@ const handler = createMcpHandler(
           stopLossPercent: z.number().min(1).max(95).optional().describe('Overrides the settings stop-loss for this position only'),
         }),
       },
-      async (input) => viaBridge('snipe_token', input, 45_000)
+      async (input) => viaBridge('snipe_token', input, 55_000)
     );
 
     server.registerTool(
@@ -195,7 +195,7 @@ const handler = createMcpHandler(
         description: 'Sell all or part of an open position (by position id or symbol).',
         inputSchema: z.object({ position: z.string().min(1), percent: z.number().min(1).max(100).optional(), reason: z.string().optional() }),
       },
-      async (input) => viaBridge('sell_position', input, 45_000)
+      async (input) => viaBridge('sell_position', input, 55_000)
     );
 
     server.registerTool(
@@ -225,7 +225,7 @@ const handler = createMcpHandler(
         description: 'Builds a real swap for the connected wallet and simulates it on the RPC (no signature, no funds). Proves live execution works.',
         inputSchema: z.object({ token: z.string().optional(), amountUsd: z.number().min(1).optional() }),
       },
-      async (input) => viaBridge('dry_run_live_trade', input, 45_000)
+      async (input) => viaBridge('dry_run_live_trade', input, 55_000)
     );
   },
   {
