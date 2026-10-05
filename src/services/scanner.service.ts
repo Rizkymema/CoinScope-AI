@@ -11,7 +11,7 @@
  * their own GeckoTerminal rate limit instead of sharing one server IP.
  */
 import { CoinData } from '../types/coin';
-import { Candle, ChartService } from './chart.service';
+import type { Candle } from './chart.service';
 import { mapPairToCoinData } from './coin.service';
 
 const GECKO = 'https://api.geckoterminal.com/api/v2/networks/solana';
@@ -27,11 +27,19 @@ const IGNORED_MINTS = new Set([
 ]);
 
 /**
- * GeckoTerminal answers bursts with 429 and the rest of the app shares the same budget, so only
- * the most active candidates are charted, one at a time.
+ * GeckoTerminal answers bursts with 429, and the rest of the app (and anything else on the same IP)
+ * shares the budget. Each scan fetches at most a few charts - ready / watch tokens first, then the
+ * stalest - and evaluates every safe candidate from a cache, so coverage rotates instead of only
+ * the most active tokens ever being looked at. A 429 pauses chart fetches for a minute.
  */
-const MAX_CHARTED = 8;
-const CHART_SPACING_MS = 2000;
+const MAX_FETCHES_PER_SCAN = 5;
+const CHART_SPACING_MS = 1500;
+const CANDLE_TTL_MS = 5 * 60_000;
+const PRIORITY_CANDLE_TTL_MS = 45_000;
+/** A Ready signal needs a chart at most this old; older ones wait one scan for a refresh. */
+const FRESH_FOR_ENTRY_MS = 90_000;
+const GECKO_COOLDOWN_MS = 60_000;
+let geckoCooldownUntil = 0;
 /** The skill only enters at 70+ (70-79 = small size, 80+ = full size). */
 export const MIN_ENTRY_SCORE = 70;
 
@@ -164,9 +172,10 @@ async function candidateMints(): Promise<string[]> {
   const mints = await cached('mints', 5 * 60_000, async () => {
     const found = new Set<string>();
     const geckoLists = ['new_pools?page=1', 'trending_pools?page=1&duration=1h', 'trending_pools?page=1&duration=6h', 'pools?page=1&sort=h24_volume_usd_desc'];
-    // Sequential on purpose: GeckoTerminal answers bursts with 429.
+    // Sequential on purpose, and skipped during a rate-limit pause (DexScreener lists still run).
     for (const path of geckoLists) {
-      const data = await getJson(`${GECKO}/${path}`, { headers: GECKO_HEADERS });
+      if (Date.now() < geckoCooldownUntil) break;
+      const data = await geckoJson(`${GECKO}/${path}`);
       (data?.data || []).forEach((pool: any) => {
         const id = String(pool?.relationships?.base_token?.data?.id || '');
         if (id.startsWith('solana_')) found.add(id.slice('solana_'.length));
@@ -257,22 +266,34 @@ async function safetyGates(mint: string): Promise<ScanGates | null> {
 
 const candleMemo = new Map<string, { at: number; candles: Candle[] }>();
 
-/**
- * 24h of 5m candles, or null when GeckoTerminal kept refusing (rate limit). Tokens already on the
- * ready / watch list refresh every scan; the rest reuse a chart up to 2 minutes old.
- */
-async function candlesFor(pool: string, mint: string, priority: boolean): Promise<{ candles: Candle[] | null; fetched: boolean }> {
-  const hit = candleMemo.get(pool);
-  if (hit && Date.now() - hit.at < (priority ? 45_000 : 120_000)) return { candles: hit.candles, fetched: false };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const candles = await ChartService.getCandles('solana', pool, '5m', mint, 288);
-    if (candles.length) {
-      candleMemo.set(pool, { at: Date.now(), candles });
-      return { candles, fetched: true };
+/** GeckoTerminal GET that starts the rate-limit pause on a 429 instead of retrying into it. */
+async function geckoJson(url: string): Promise<any | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  try {
+    const res = await fetch(url, { headers: GECKO_HEADERS, signal: ctrl.signal });
+    if (res.status === 429) {
+      geckoCooldownUntil = Date.now() + GECKO_COOLDOWN_MS;
+      return null;
     }
-    if (attempt === 0) await sleep(5000);
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  return { candles: hit?.candles ?? null, fetched: true };
+}
+
+/** 24h of 5m candles for the token side of `pool`, oldest first; null if GeckoTerminal did not answer. */
+async function fetchCandles(pool: string, mint: string): Promise<Candle[] | null> {
+  // Without `token` the API charts the pool's base side, which for a SOL-quoted pair is SOL.
+  const data = await geckoJson(`${GECKO}/pools/${pool}/ohlcv/minute?aggregate=5&limit=288&currency=usd&token=${mint}`);
+  const rows: number[][] | undefined = data?.data?.attributes?.ohlcv_list;
+  if (!rows) return null;
+  return rows
+    .map(([time, open, high, low, close, volume]) => ({ time: +time, open: +open, high: +high, low: +low, close: +close, volume: +volume || 0 }))
+    .filter((c) => Number.isFinite(c.time) && c.close > 0)
+    .sort((a, b) => a.time - b.time);
 }
 
 function to15m(c5: Candle[]): Candle[] {
@@ -522,25 +543,41 @@ export const ScannerService = {
       else gated.push({ pair, gates });
     });
 
+    // Fetch order: tokens on the ready / watch list, then never-charted ones, then the stalest.
     const priority = new Set(opts.priorityMints || []);
-    const isPriority = (p: any) => (priority.has(p.baseToken.address) ? 1 : 0);
-    gated.sort((a, b) => isPriority(b.pair) - isPriority(a.pair) || (b.pair.volume?.h1 || 0) - (a.pair.volume?.h1 || 0));
-    gated.slice(MAX_CHARTED).forEach(({ pair, gates }) =>
-      signals.push({ ...signalFor(pair, 'rejected', `Not charted this round (outside the ${MAX_CHARTED} most active)`), gates })
+    const chartAge = (pool: string) => {
+      const hit = candleMemo.get(pool);
+      return hit ? Date.now() - hit.at : Infinity;
+    };
+    gated.sort(
+      (a, b) =>
+        Number(priority.has(b.pair.baseToken.address)) - Number(priority.has(a.pair.baseToken.address)) ||
+        chartAge(b.pair.pairAddress) - chartAge(a.pair.pairAddress) ||
+        (b.pair.volume?.h1 || 0) - (a.pair.volume?.h1 || 0)
     );
+    let fetchesLeft = MAX_FETCHES_PER_SCAN;
 
     const maxStop = opts.maxStopPercent / 100;
     const lamports = Math.round((opts.buyAmountUsd / (opts.solPriceUsd || 1)) * 1e9);
     const feePct = opts.buyAmountUsd > 0 ? (100 * 2 * opts.priorityFeeSol * opts.solPriceUsd) / opts.buyAmountUsd : 0;
 
-    await mapLimit(gated.slice(0, MAX_CHARTED), 1, async ({ pair, gates }) => {
+    await mapLimit(gated, 1, async ({ pair, gates }) => {
       const mint = pair.baseToken.address;
-      const { candles, fetched } = await candlesFor(pair.pairAddress, mint, priority.has(mint));
-      if (fetched) await sleep(CHART_SPACING_MS);
-      if (!candles) {
-        signals.push({ ...signalFor(pair, 'rejected', 'Chart data rate-limited - retried next scan'), gates });
+      const ttl = priority.has(mint) ? PRIORITY_CANDLE_TTL_MS : CANDLE_TTL_MS;
+      if (chartAge(pair.pairAddress) > ttl && fetchesLeft > 0 && Date.now() >= geckoCooldownUntil) {
+        fetchesLeft--;
+        const fresh = await fetchCandles(pair.pairAddress, mint);
+        if (fresh?.length) candleMemo.set(pair.pairAddress, { at: Date.now(), candles: fresh });
+        await sleep(CHART_SPACING_MS);
+      }
+      const memo = candleMemo.get(pair.pairAddress);
+      if (!memo) {
+        const why = Date.now() < geckoCooldownUntil ? 'Chart data rate-limited - retried next scan' : 'Chart queued for a coming scan';
+        signals.push({ ...signalFor(pair, 'rejected', why), gates });
         return;
       }
+      const candles = memo.candles;
+      const chartAgeMs = Date.now() - memo.at;
       if (candles.length < 24) {
         signals.push({ ...signalFor(pair, 'rejected', 'Under 2 hours of candles'), gates });
         return;
@@ -569,6 +606,11 @@ export const ScannerService = {
       if (status === 'ready' && score.total < MIN_ENTRY_SCORE) {
         status = 'watch';
         reason = `${reason} - score ${score.total}/100 is under ${MIN_ENTRY_SCORE}`;
+      }
+      // Never enter on a cached chart: the token is charted first next scan and re-checked fresh.
+      if (status === 'ready' && chartAgeMs > FRESH_FOR_ENTRY_MS) {
+        status = 'watch';
+        reason = `${reason} (refreshing the chart before entry)`;
       }
 
       const slPercent = (100 * (entry - levels.stop)) / entry;

@@ -7,6 +7,7 @@
 import { useBotStore } from '../store/useBotStore';
 import { executeBotTool } from '../lib/bot-tool-executor';
 import type { BridgeCommand, BridgeResult } from '../lib/bridge-store';
+import { getScannerSummary } from '../lib/scanner-status';
 
 const ACCESS_KEY_STORAGE = 'coinscope_access_key';
 /**
@@ -111,7 +112,7 @@ export const BridgeService = {
     try {
       const store = useBotStore.getState();
       const body = {
-        snapshot: store.getSnapshot(),
+        snapshot: { ...store.getSnapshot(), scanner: getScannerSummary() },
         logs: store.logs.slice(0, 40),
         positions: store.positions.map((p) => ({
           id: p.id,

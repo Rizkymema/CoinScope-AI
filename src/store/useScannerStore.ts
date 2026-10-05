@@ -3,6 +3,7 @@ import { MIN_ENTRY_SCORE, ScannerService, ScanSignal } from '../services/scanner
 import { AudioService } from '../services/audio.service';
 import { SolPriceService } from '../services/solprice.service';
 import { useBotStore } from './useBotStore';
+import { ScannerSignalBrief, setScannerSummary } from '../lib/scanner-status';
 
 /**
  * Runs the setup scanner every minute while the app is open, on any tab, and alerts once per
@@ -211,12 +212,45 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
         if (get().alerts) ready.filter((s) => !previous.has(s.id)).forEach(notify);
         await autoBuy(ready);
 
+        const error = result.candidateCount === 0 ? 'No market data came back - the data APIs may be rate-limiting. Retrying next minute.' : null;
         set({
           signals: result.signals,
           candidateCount: result.candidateCount,
           lastScanAt: result.scannedAt,
           readyIds: ready.map((s) => s.id),
-          error: result.candidateCount === 0 ? 'No market data came back - the data APIs may be rate-limiting. Retrying next minute.' : null,
+          error,
+        });
+
+        const brief = (s: ScanSignal): ScannerSignalBrief => ({
+          symbol: s.coin.symbol,
+          mint: s.id,
+          setup: s.setup,
+          score: s.score?.total,
+          reason: s.reason,
+          entryLow: s.entryLow,
+          entryHigh: s.entryHigh,
+          stopPrice: s.stopPrice,
+          targetPrice: s.targetPrice,
+          slPercent: s.slPercent,
+          tpPercent: s.tpPercent,
+          netRewardRisk: s.netRewardRisk,
+        });
+        const rejectedBy = new Map<string, number>();
+        result.signals
+          .filter((s) => s.status === 'rejected')
+          // Group "Liquidity $12K is under $25K" and friends by their wording, not their numbers.
+          .forEach((s) => {
+            const key = s.reason.replace(/\$[\d.,]+[KM]?|\d+(\.\d+)?%|\$0\.[\d{}]+/g, '#');
+            rejectedBy.set(key, (rejectedBy.get(key) || 0) + 1);
+          });
+        setScannerSummary({
+          enabled: get().enabled,
+          scannedAt: result.scannedAt,
+          candidates: result.candidateCount,
+          ready: result.signals.filter((s) => s.status === 'ready').map(brief),
+          watch: result.signals.filter((s) => s.status === 'watch').slice(0, 8).map(brief),
+          rejectedBy: [...rejectedBy.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([reason, count]) => ({ reason, count })),
+          error,
         });
       } catch (err) {
         set({ error: err instanceof Error ? err.message : 'Scan failed' });
