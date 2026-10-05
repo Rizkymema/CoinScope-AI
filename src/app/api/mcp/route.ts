@@ -147,6 +147,11 @@ const handler = createMcpHandler(
           trailingStopPercent: z.number().min(0).max(90).optional(),
           profitLockTriggerPercent: z.number().min(0).max(1000).optional().describe('Once a position is up this %, raise its stop above cost. 0 = off'),
           profitLockPercent: z.number().min(0).max(500).optional().describe('Profit the raised stop keeps, above cost (covers sell fees)'),
+          dailyLossLimitUsd: z.number().min(0).optional().describe('Pause the auto-bot once today\'s realized loss reaches this many USD. 0 = off'),
+          scannerAutoBuy: z
+            .boolean()
+            .optional()
+            .describe('Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.'),
           minLiquidityUsd: z.number().min(0).optional(),
           maxTokenAgeMinutes: z.number().min(0).optional(),
           maxPositions: z.number().int().min(1).max(50).optional(),
@@ -172,7 +177,13 @@ const handler = createMcpHandler(
       {
         title: 'Buy token',
         description: 'Buy a token through the bot (paper or live per settings). Identify by coin id (chain:address), mint address or symbol seen in get_new_coins.',
-        inputSchema: z.object({ token: z.string().min(1), amountUsd: z.number().min(1).optional(), reason: z.string().optional() }),
+        inputSchema: z.object({
+          token: z.string().min(1),
+          amountUsd: z.number().min(1).optional(),
+          reason: z.string().optional(),
+          takeProfitPercent: z.number().min(1).max(2000).optional().describe('Overrides the settings take-profit for this position only'),
+          stopLossPercent: z.number().min(1).max(95).optional().describe('Overrides the settings stop-loss for this position only'),
+        }),
       },
       async (input) => viaBridge('snipe_token', input, 45_000)
     );

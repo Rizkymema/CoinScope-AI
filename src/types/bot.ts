@@ -71,6 +71,12 @@ export interface BotSettings {
   liveSigner: LiveSignerKind;
   /** Pause the auto-bot once today's realized loss reaches this many USD. 0 disables the limit. */
   dailyLossLimitUsd: number;
+  /**
+   * Let the setup scanner open positions by itself: only Ready signals that scored at least the
+   * entry threshold and passed the sell-back quote, one per scan, within maxPositions and the
+   * daily loss limit. Off by default.
+   */
+  scannerAutoBuy: boolean;
 }
 
 export interface BotPosition {

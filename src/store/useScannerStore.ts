@@ -68,6 +68,60 @@ function notify(signal: ScanSignal) {
   useBotStore.setState({ latestToastNotification: { title: `Setup ready: ${sym}`, description: body, type: 'info', coinSymbol: sym } });
 }
 
+/* ------------------------------------------------------------------ auto-buy */
+
+const AUTO_BUY_COOLDOWN_MS = 60 * 60_000;
+/** Live auto-buys never spend more than this share of the signing wallet's SOL (micro-account rule). */
+const AUTO_BUY_MAX_WALLET_SHARE = 0.35;
+const autoBuyAt = new Map<string, number>();
+const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
+
+/**
+ * At most one entry per scan, and only while every guard holds: the setting is on, there is room
+ * under maxPositions, the daily loss limit is not hit, the signal is Ready with a passing sell-back
+ * quote and reward over risk after fees, the token is not already held or pending, it was not
+ * bought in the last hour, and (live) the buy is a small share of the signing wallet.
+ */
+async function autoBuy(ready: ScanSignal[]) {
+  const bot = useBotStore.getState();
+  const { settings } = bot;
+  if (!settings.scannerAutoBuy) return;
+  if (bot.positions.length >= settings.maxPositions) return;
+  if (settings.dailyLossLimitUsd > 0 && bot.getTodayRealizedPnl() <= -settings.dailyLossLimitUsd) return;
+
+  if (!settings.paperTrading) {
+    const solBalance = settings.liveSigner === 'bot' ? bot.botWallet.solBalance : settings.solBalance;
+    const walletUsd = (solBalance ?? 0) * (bot.solPriceUsd || SolPriceService.getCached());
+    if (settings.buyAmountUsd > walletUsd * AUTO_BUY_MAX_WALLET_SHARE) {
+      bot.log('warning', `[AUTO-BUY] Skipped: $${settings.buyAmountUsd} is over ${Math.round(AUTO_BUY_MAX_WALLET_SHARE * 100)}% of the signing wallet ($${walletUsd.toFixed(2)}).`);
+      return;
+    }
+  }
+
+  const held = new Set(bot.positions.map((p) => p.mint || p.coin.mint || p.coin.id));
+  const candidate = [...ready]
+    .sort((a, b) => (b.score?.total ?? 0) - (a.score?.total ?? 0))
+    .find(
+      (s) =>
+        s.swap?.sellable === true &&
+        (s.netRewardRisk ?? 0) >= 1 &&
+        !held.has(s.id) &&
+        !bot.pendingTradeIds.includes(s.coin.id) &&
+        Date.now() - (autoBuyAt.get(s.id) || 0) > AUTO_BUY_COOLDOWN_MS
+    );
+  if (!candidate) return;
+
+  autoBuyAt.set(candidate.id, Date.now());
+  const r = await bot.manualSnipeCoin(candidate.coin, settings.buyAmountUsd, `scanner auto-buy ${candidate.setup} ${candidate.score?.total}`, {
+    tp: round1(candidate.tpPercent),
+    sl: round1(candidate.slPercent),
+  });
+  bot.log(r.success ? 'buy' : 'warning', `[AUTO-BUY] ${candidate.coin.symbol}: ${r.message}`, { coinSymbol: candidate.coin.symbol });
+  if (!r.success) {
+    useBotStore.setState({ latestToastNotification: { title: `Auto-buy failed: ${candidate.coin.symbol}`, description: r.message, type: 'error', coinSymbol: candidate.coin.symbol } });
+  }
+}
+
 let timer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
 
@@ -133,6 +187,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
         const ready = result.signals.filter((s) => s.status === 'ready' && (s.score?.total ?? 0) >= MIN_ENTRY_SCORE);
         const previous = new Set(get().readyIds);
         if (get().alerts) ready.filter((s) => !previous.has(s.id)).forEach(notify);
+        await autoBuy(ready);
 
         set({
           signals: result.signals,

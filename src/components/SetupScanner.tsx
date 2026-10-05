@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Loader2, Pause, Play, Radar, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Loader2, Pause, Play, Radar, RefreshCw, ShieldCheck, Zap, ZapOff } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
@@ -159,7 +159,21 @@ export const SetupScanner: React.FC = () => {
       scanNow: s.scanNow,
     }))
   );
-  const { settings } = useBotStore(useShallow((s) => ({ settings: s.settings })));
+  const { settings, updateSettings } = useBotStore(useShallow((s) => ({ settings: s.settings, updateSettings: s.updateSettings })));
+
+  const toggleAutoBuy = () => {
+    const next = !settings.scannerAutoBuy;
+    if (
+      next &&
+      !settings.paperTrading &&
+      !window.confirm(
+        `Auto-buy will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${MIN_ENTRY_SCORE}) that pass the sell-back test. Turn it on?`
+      )
+    ) {
+      return;
+    }
+    updateSettings({ scannerAutoBuy: next });
+  };
 
   const ready = signals.filter((s) => s.status === 'ready');
   const watching = signals.filter((s) => s.status === 'watch');
@@ -186,6 +200,15 @@ export const SetupScanner: React.FC = () => {
             {alerts ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
             {alerts ? 'Alerts on' : 'Alerts off'}
           </button>
+          <button
+            type="button"
+            onClick={toggleAutoBuy}
+            className={`btn btn-secondary ${settings.scannerAutoBuy ? 'text-pos' : ''}`}
+            title={`Buy Ready signals automatically: $${settings.buyAmountUsd} each, at most ${settings.maxPositions} open, score ≥ ${MIN_ENTRY_SCORE}, sell-back test passed, within the daily loss limit`}
+          >
+            {settings.scannerAutoBuy ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
+            {settings.scannerAutoBuy ? 'Auto-buy on' : 'Auto-buy off'}
+          </button>
           <button type="button" onClick={() => void scanNow()} disabled={scanning} className="btn btn-secondary">
             <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />
             Scan now
@@ -211,7 +234,8 @@ export const SetupScanner: React.FC = () => {
           Buy size ${settings.buyAmountUsd} ·{' '}
           <span className={settings.paperTrading ? 'text-warn' : 'text-neg'}>{settings.paperTrading ? 'paper' : 'live'}</span> · TP +
           {Math.min(50, Math.max(10, settings.takeProfitPercent))}% · stop ≤ 12% · profit lock +{settings.profitLockTriggerPercent}% → +
-          {settings.profitLockPercent}%
+          {settings.profitLockPercent}% · auto-buy{' '}
+          <span className={settings.scannerAutoBuy ? 'text-pos' : 'text-slate-500'}>{settings.scannerAutoBuy ? `on, max ${settings.maxPositions} positions` : 'off'}</span>
         </span>
       </div>
 

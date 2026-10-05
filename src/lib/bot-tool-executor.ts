@@ -28,6 +28,8 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'aiAdjustTargets',
   'soundAlerts',
   'priorityFeeSol',
+  'dailyLossLimitUsd',
+  'scannerAutoBuy',
 ];
 
 function coinSummary(c: CoinData) {
@@ -130,13 +132,17 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
           if (input && input[k] !== undefined && input[k] !== null) (patch as any)[k] = input[k];
         });
         if (Object.keys(patch).length === 0) return fail('No valid settings supplied.');
-        if (patch.paperTrading === false) {
+        // Going live, or arming auto-buy while live, needs a signer that can actually sign right now.
+        const goingLive = patch.paperTrading === false;
+        const armingLiveAutoBuy = patch.scannerAutoBuy === true && (patch.paperTrading ?? store.settings.paperTrading) === false;
+        if (goingLive || armingLiveAutoBuy) {
           const ready = store.settings.liveSigner === 'bot' ? store.botWallet.unlocked : store.settings.phantomWalletConnected;
           if (!ready) {
+            const what = goingLive ? 'enable live trading' : 'enable auto-buy for live trading';
             return fail(
               store.settings.liveSigner === 'bot'
-                ? 'Cannot enable live trading: the bot wallet is locked or missing. Ask the user to unlock it under Bot > Settings.'
-                : 'Cannot enable live trading: no wallet connected. Ask the user to connect Phantom/Solflare first.'
+                ? `Cannot ${what}: the bot wallet is locked or missing. Ask the user to unlock it under Bot > Settings.`
+                : `Cannot ${what}: no wallet connected. Ask the user to connect Phantom/Solflare first.`
             );
           }
         }
@@ -149,7 +155,10 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
       case 'snipe_token': {
         const coin = store.findCoin(String(input?.token || ''));
         if (!coin) return fail(`Token "${input?.token}" not found in the scanner. Use get_new_coins to list available tokens.`);
-        const res = await store.manualSnipeCoin(coin, input?.amountUsd ? Number(input.amountUsd) : undefined, `AI: ${input?.reason || 'manual via chat'}`);
+        const tp = Number(input?.takeProfitPercent) || 0;
+        const sl = Number(input?.stopLossPercent) || 0;
+        const targets = tp > 0 || sl > 0 ? { tp: tp > 0 ? tp : store.settings.takeProfitPercent, sl: sl > 0 ? sl : store.settings.stopLossPercent } : undefined;
+        const res = await store.manualSnipeCoin(coin, input?.amountUsd ? Number(input.amountUsd) : undefined, `AI: ${input?.reason || 'manual via chat'}`, targets);
         const pos = useBotStore.getState().positions.find((p) => p.coin.id === coin.id);
         return res.success ? ok({ ...res, position: pos ? positionSummary(pos) : null }) : fail(res.message);
       }
