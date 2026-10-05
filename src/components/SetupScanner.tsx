@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Loader2, Pause, Play, Radar, RefreshCw, ShieldCheck, Zap, ZapOff } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Radar, RefreshCw, ShieldCheck, Zap, ZapOff } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
-import { MIN_ENTRY_SCORE, ScanSignal, SetupKind } from '@/services/scanner.service';
+import { minEntryScore, ScanSignal, SetupKind } from '@/services/scanner.service';
 import { CoinAvatar } from './CoinAvatar';
 import { formatNumber, formatPrice, timeAgo } from '@/lib/formatters';
 
@@ -13,13 +13,14 @@ const SETUP_LABEL: Record<SetupKind, string> = {
   breakout: 'Breakout-retest',
   flag: 'Flag',
   pullback: 'Trend pullback',
+  momentum: 'Momentum',
 };
 
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
 
-function scoreChip(total: number) {
+function scoreChip(total: number, minScore: number) {
   if (total >= 80) return 'chip chip-pos';
-  if (total >= MIN_ENTRY_SCORE) return 'chip chip-warn';
+  if (total >= minScore) return 'chip chip-warn';
   return 'chip';
 }
 
@@ -69,7 +70,7 @@ const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
               {s.setup && <span className="chip chip-info">{SETUP_LABEL[s.setup]}</span>}
               {s.score && (
                 <span
-                  className={scoreChip(s.score.total)}
+                  className={scoreChip(s.score.total, minEntryScore(settings.scannerMode))}
                   title={`Safety ${s.score.safety}/30 · Holders ${s.score.holders}/20 · Liquidity ${s.score.liquidity}/20 · Momentum ${s.score.momentum}/20 · Social ${s.score.social}/10`}
                 >
                   {s.score.total}/100
@@ -167,7 +168,7 @@ export const SetupScanner: React.FC = () => {
       next &&
       !settings.paperTrading &&
       !window.confirm(
-        `Auto-buy will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${MIN_ENTRY_SCORE}) that pass the sell-back test. Turn it on?`
+        `Auto-buy will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${minEntryScore(settings.scannerMode)}) that pass the sell-back test. Turn it on?`
       )
     ) {
       return;
@@ -188,7 +189,7 @@ export const SetupScanner: React.FC = () => {
             Setup scanner
           </h1>
           <p className="text-[13px] text-slate-400 mt-0.5">
-            Every minute: safety gates, clone and parabolic filters, then breakout, flag and pullback setups. Buy only when a card says Ready.
+            Every minute: safety gates and clone filters, then {settings.scannerMode === 'simple' ? 'momentum breakouts as they happen, plus' : ''} breakout, flag and pullback setups. Buy only when a card says Ready.
           </p>
         </div>
         <div className="lg:ml-auto flex items-center gap-2 flex-wrap">
@@ -204,10 +205,19 @@ export const SetupScanner: React.FC = () => {
             type="button"
             onClick={toggleAutoBuy}
             className={`btn btn-secondary ${settings.scannerAutoBuy ? 'text-pos' : ''}`}
-            title={`Buy Ready signals automatically: $${settings.buyAmountUsd} each, at most ${settings.maxPositions} open, score ≥ ${MIN_ENTRY_SCORE}, sell-back test passed, within the daily loss limit`}
+            title={`Buy Ready signals automatically: $${settings.buyAmountUsd} each, at most ${settings.maxPositions} open, score ≥ ${minEntryScore(settings.scannerMode)}, sell-back test passed, within the daily loss limit`}
           >
             {settings.scannerAutoBuy ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
             {settings.scannerAutoBuy ? 'Auto-buy on' : 'Auto-buy off'}
+          </button>
+          <button
+            type="button"
+            onClick={() => updateSettings({ scannerMode: settings.scannerMode === 'simple' ? 'strict' : 'simple' })}
+            className="btn btn-secondary"
+            title="Simple buys 5m momentum breakouts as they happen (more trades). Strict waits for a retest, flag or pullback (fewer trades)."
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            {settings.scannerMode === 'simple' ? 'Mode: Simple' : 'Mode: Strict'}
           </button>
           <button type="button" onClick={() => void scanNow()} disabled={scanning} className="btn btn-secondary">
             <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />

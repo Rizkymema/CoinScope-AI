@@ -148,6 +148,10 @@ const handler = createMcpHandler(
           profitLockTriggerPercent: z.number().min(0).max(1000).optional().describe('Once a position is up this %, raise its stop above cost. 0 = off'),
           profitLockPercent: z.number().min(0).max(500).optional().describe('Profit the raised stop keeps, above cost (covers sell fees)'),
           dailyLossLimitUsd: z.number().min(0).optional().describe('Pause the auto-bot once today\'s realized loss reaches this many USD. 0 = off'),
+          scannerMode: z
+            .enum(['strict', 'simple'])
+            .optional()
+            .describe("Scanner entries: 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks"),
           scannerAutoBuy: z
             .boolean()
             .optional()

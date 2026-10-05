@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MIN_ENTRY_SCORE, ScannerService, ScanSignal } from '../services/scanner.service';
+import { minEntryScore, ScannerService, ScanSignal } from '../services/scanner.service';
 import { AudioService } from '../services/audio.service';
 import { SolPriceService } from '../services/solprice.service';
 import { useBotStore } from './useBotStore';
@@ -203,11 +203,13 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
           solPriceUsd: bot.solPriceUsd || SolPriceService.getCached(),
           priorityFeeSol: settings.priorityFeeSol,
           takeProfitPercent: Math.min(50, Math.max(10, settings.takeProfitPercent)),
+          mode: settings.scannerMode,
           maxStopPercent: MAX_STOP_PERCENT,
           priorityMints: get().signals.filter((s) => s.status !== 'rejected').map((s) => s.id),
         });
 
-        const ready = result.signals.filter((s) => s.status === 'ready' && (s.score?.total ?? 0) >= MIN_ENTRY_SCORE);
+        const minScore = minEntryScore(useBotStore.getState().settings.scannerMode);
+        const ready = result.signals.filter((s) => s.status === 'ready' && (s.score?.total ?? 0) >= minScore);
         const previous = new Set(get().readyIds);
         if (get().alerts) ready.filter((s) => !previous.has(s.id)).forEach(notify);
         await autoBuy(ready);

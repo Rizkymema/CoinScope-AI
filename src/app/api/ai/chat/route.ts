@@ -70,6 +70,11 @@ const BOT_TOOLS: Anthropic.Tool[] = [
         profitLockTriggerPercent: { type: 'number', minimum: 0, maximum: 1000, description: 'Once a position is up this %, raise its stop above cost. 0 = off.' },
         profitLockPercent: { type: 'number', minimum: 0, maximum: 500, description: 'Profit the raised stop keeps, above cost (covers sell fees).' },
         dailyLossLimitUsd: { type: 'number', minimum: 0, description: "Pause the auto-bot once today's realized loss reaches this many USD. 0 = off." },
+        scannerMode: {
+          type: 'string',
+          enum: ['strict', 'simple'],
+          description: "Scanner entries: 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks.",
+        },
         scannerAutoBuy: {
           type: 'boolean',
           description: 'Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.',

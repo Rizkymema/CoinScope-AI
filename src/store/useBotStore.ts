@@ -205,6 +205,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   liveSigner: 'wallet',
   dailyLossLimitUsd: 100,
   scannerAutoBuy: false,
+  scannerMode: 'strict',
 };
 
 /** Liquid Solana token used by the live-pipeline test when the scanner has nothing yet. */

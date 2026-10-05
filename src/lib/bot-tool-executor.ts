@@ -30,6 +30,7 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'priorityFeeSol',
   'dailyLossLimitUsd',
   'scannerAutoBuy',
+  'scannerMode',
 ];
 
 function coinSummary(c: CoinData) {

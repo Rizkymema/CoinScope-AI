@@ -77,6 +77,8 @@ export interface BotSettings {
    * daily loss limit. Off by default.
    */
   scannerAutoBuy: boolean;
+  /** 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks. */
+  scannerMode: 'strict' | 'simple';
 }
 
 export interface BotPosition {
