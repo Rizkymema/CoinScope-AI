@@ -62,7 +62,7 @@ export default function DashboardPage() {
 
   // Entries and exits run in this tab: keep it awake (screen, and an inaudible tone so the browser
   // does not throttle or freeze it when hidden) and warn before closing it.
-  useKeepAlive(isBotActive || hasLivePositions || (settings.scannerAutoBuy && !settings.paperTrading));
+  useKeepAlive(isBotActive || hasLivePositions || settings.scannerAutoBuy);
 
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
