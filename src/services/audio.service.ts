@@ -104,4 +104,32 @@ export const AudioService = {
       // AudioContext policy fallback
     }
   },
+
+  /** Two short rising beeps: a scanner setup is ready to enter. */
+  playSignalSound() {
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+
+      [0, 0.18].forEach((offset, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const t = ctx.currentTime + offset;
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(i === 0 ? 783.99 : 1046.5, t); // G5, C6
+
+        gain.gain.setValueAtTime(0.14, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(t);
+        osc.stop(t + 0.14);
+      });
+    } catch {
+      // AudioContext policy fallback
+    }
+  },
 };

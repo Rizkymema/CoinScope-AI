@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Bot, Globe, Key, TrendingUp, X } from 'lucide-react';
+import { Activity, Bot, Globe, Key, Radar, TrendingUp, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SearchPanel } from '@/components/SearchPanel';
@@ -13,15 +13,18 @@ import { FilterTabs, FilterType } from '@/components/FilterTabs';
 import { NewCoinsLiveFeed } from '@/components/NewCoinsLiveFeed';
 import { LiveMarketTicker } from '@/components/LiveMarketTicker';
 import { AutoBotDashboard } from '@/components/AutoBotDashboard';
+import { SetupScanner } from '@/components/SetupScanner';
+import { useScannerStore } from '@/store/useScannerStore';
 import { LoginModal } from '@/components/LoginModal';
 import { useBotStore } from '@/store/useBotStore';
 import { useKeepAlive } from '@/hooks/useKeepAlive';
 
-type Tab = 'trending' | 'new' | 'bot';
+type Tab = 'trending' | 'new' | 'scanner' | 'bot';
 
 const TABS: { id: Tab; label: string; icon: typeof TrendingUp }[] = [
   { id: 'trending', label: 'Market', icon: TrendingUp },
   { id: 'new', label: 'New Launches', icon: Globe },
+  { id: 'scanner', label: 'Scanner', icon: Radar },
   { id: 'bot', label: 'Bot', icon: Bot },
 ];
 
@@ -55,6 +58,7 @@ export default function DashboardPage() {
     }))
   );
   const setIsLoginOpen = setWalletDialogOpen;
+  const readyCount = useScannerStore((s) => s.readyIds.length);
 
   // Entries and exits run in this tab: keep the screen awake and warn before closing it.
   useKeepAlive(isBotActive || hasLivePositions);
@@ -62,7 +66,11 @@ export default function DashboardPage() {
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
   useEffect(() => {
-    Promise.resolve(useBotStore.persist.rehydrate()).then(() => useBotStore.getState().boot());
+    Promise.resolve(useBotStore.persist.rehydrate()).then(() => {
+      useBotStore.getState().boot();
+      // The scanner reads buy size and fees from the bot settings, so it starts after they load.
+      useScannerStore.getState().init();
+    });
   }, []);
 
   useEffect(() => {
@@ -109,6 +117,11 @@ export default function DashboardPage() {
                 {id === 'bot' && positionsCount > 0 && (
                   <span className="ml-0.5 px-1.5 rounded-[5px] bg-signal/15 text-signal text-[10px] font-bold">
                     {positionsCount}
+                  </span>
+                )}
+                {id === 'scanner' && readyCount > 0 && (
+                  <span className="ml-0.5 px-1.5 rounded-[5px] bg-pos/15 text-pos text-[10px] font-bold" title={`${readyCount} setup(s) ready`}>
+                    {readyCount}
                   </span>
                 )}
               </button>
@@ -159,7 +172,7 @@ export default function DashboardPage() {
 
       {/* ---------------------------------------------------------------- content */}
       <main className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {activeTab !== 'bot' && (
+        {(activeTab === 'trending' || activeTab === 'new') && (
           <div className="flex flex-col lg:flex-row lg:items-center gap-3">
             <div className="min-w-0">
               <h1 className="text-[15px] font-bold text-white leading-tight">
@@ -194,6 +207,8 @@ export default function DashboardPage() {
             <NewCoinsLiveFeed />
           </>
         )}
+
+        {activeTab === 'scanner' && <SetupScanner />}
 
         {activeTab === 'bot' && <AutoBotDashboard />}
       </main>

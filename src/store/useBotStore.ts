@@ -73,7 +73,13 @@ interface BotState {
   // scanner + execution
   ingestCoins: (coins: CoinData[], origin?: 'stream' | 'feed') => void;
   processIncomingCoins: (coins: CoinData[]) => Promise<void>;
-  manualSnipeCoin: (coin: CoinData, amountUsd?: number, reason?: string) => Promise<{ success: boolean; message: string }>;
+  /** `targets` overrides the settings' TP / SL percentages for this one position (scanner signals). */
+  manualSnipeCoin: (
+    coin: CoinData,
+    amountUsd?: number,
+    reason?: string,
+    targets?: { tp: number; sl: number }
+  ) => Promise<{ success: boolean; message: string }>;
   closePosition: (positionId: string, exitReason: ExitReason, percent?: number) => Promise<{ success: boolean; message: string }>;
   setPositionTargets: (positionId: string, tpPercent?: number, slPercent?: number) => boolean;
   updatePositionsWithLatestCoins: (coins: CoinData[]) => void;
@@ -558,7 +564,7 @@ export const useBotStore = create<BotState>()(
         }
       },
 
-      manualSnipeCoin: async (coin, amountUsd, reason = 'manual') => {
+      manualSnipeCoin: async (coin, amountUsd, reason = 'manual', targets) => {
         const { settings, walletBalance, pendingTradeIds } = get();
         const amount = amountUsd && amountUsd > 0 ? amountUsd : settings.buyAmountUsd;
         if (pendingTradeIds.includes(coin.id)) return { success: false, message: `${coin.symbol} already has an order in flight.` };
@@ -577,7 +583,7 @@ export const useBotStore = create<BotState>()(
 
         set((s) => ({ pendingTradeIds: [...s.pendingTradeIds, coin.id] }));
         try {
-          return await openPosition(coin, amount, { tp: settings.takeProfitPercent, sl: settings.stopLossPercent, reason });
+          return await openPosition(coin, amount, { tp: targets?.tp ?? settings.takeProfitPercent, sl: targets?.sl ?? settings.stopLossPercent, reason });
         } finally {
           set((s) => ({ pendingTradeIds: s.pendingTradeIds.filter((id) => id !== coin.id) }));
         }

@@ -152,7 +152,7 @@ async function fetchBestPairsForTokens(tokenMetas: TokenMeta[]): Promise<any[]> 
   return pickBestPairs(allPairs, metaByKey);
 }
 
-function mapPairToCoinData(pair: any): CoinData {
+export function mapPairToCoinData(pair: any): CoinData {
   if (!pair) return null as any;
   const imageUrl = pair.info?.imageUrl || null;
   const headerUrl = pair.info?.header || null;
