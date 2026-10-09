@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, Radar, RefreshCw, ShieldCheck, Users, X, Zap, ZapOff } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, RefreshCw, ShieldCheck, Users, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
@@ -32,7 +32,7 @@ function ageLabel(hours: number) {
   return `${Math.round(hours * 60)}m old`;
 }
 
-const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
+export const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
   const { manualSnipeCoin, settings, pendingTradeIds } = useBotStore(
     useShallow((st) => ({ manualSnipeCoin: st.manualSnipeCoin, settings: st.settings, pendingTradeIds: st.pendingTradeIds }))
   );
@@ -145,7 +145,7 @@ const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
       <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
         Liq {formatNumber(s.liquidityUsd)} · MC {formatNumber(s.marketCapUsd)} · 1h vol {formatNumber(s.volume1hUsd)} · 1h buys/sells {s.buys1h}/{s.sells1h}
         {s.rsi !== undefined ? ` · RSI 5m ${s.rsi.toFixed(0)}` : ''}
-        {s.gates ?` · top 10 ${s.gates.top10Pct.toFixed(0)}% · insiders ${s.gates.insiderPct.toFixed(0)}%` : ''}
+        {s.gates ? ` · top 10 ${s.gates.top10Pct.toFixed(0)}% · insiders ${s.gates.insiderPct.toFixed(0)}%` : ''}
         {s.costPercent !== undefined ? ` · fees ${s.costPercent.toFixed(1)}% round trip · net R:R 1:${(s.netRewardRisk ?? 0).toFixed(1)}` : ''}
         {s.invalidation ? ` · cancel on ${s.invalidation}` : ''}
       </p>
@@ -154,7 +154,7 @@ const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
   );
 };
 
-const SmartWallets: React.FC = () => {
+export const SmartWallets: React.FC = () => {
   const { wallets, updateSettings } = useBotStore(useShallow((s) => ({ wallets: s.settings.smartWallets || [], updateSettings: s.updateSettings })));
   const [draft, setDraft] = useState('');
   const [note, setNote] = useState<string | null>(null);
@@ -175,7 +175,7 @@ const SmartWallets: React.FC = () => {
   return (
     <details className="panel overflow-hidden">
       <summary className="px-4 py-3 text-[13px] font-bold text-white cursor-pointer select-none">
-        Smart wallets <span className="text-slate-500 font-normal">({wallets.length})</span>
+        Smart wallets <span className="text-slate-500 font-normal">({wallets.length}) — optional</span>
       </summary>
       <div className="border-t border-line px-4 py-3 space-y-3">
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -229,7 +229,8 @@ const SmartWallets: React.FC = () => {
   );
 };
 
-export const SetupScanner: React.FC = () => {
+/** The scanner's signal lists with their small toolbar. Starting and stopping auto trade lives on the page above. */
+export const ScannerSignals: React.FC = () => {
   const { enabled, alerts, scanning, signals, candidateCount, lastScanAt, error, setEnabled, setAlerts, scanNow } = useScannerStore(
     useShallow((s) => ({
       enabled: s.enabled,
@@ -246,36 +247,19 @@ export const SetupScanner: React.FC = () => {
   );
   const { settings, updateSettings } = useBotStore(useShallow((s) => ({ settings: s.settings, updateSettings: s.updateSettings })));
 
-  const toggleAutoBuy = () => {
-    const next = !settings.scannerAutoBuy;
-    if (
-      next &&
-      !settings.paperTrading &&
-      !window.confirm(
-        `Auto-buy will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${minEntryScore(settings.scannerMode)}) that pass the sell-back test. Turn it on?`
-      )
-    ) {
-      return;
-    }
-    updateSettings({ scannerAutoBuy: next });
-  };
-
   const ready = signals.filter((s) => s.status === 'ready');
   const watching = signals.filter((s) => s.status === 'watch');
   const rejected = signals.filter((s) => s.status === 'rejected');
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <div className="flex flex-col lg:flex-row lg:items-center gap-3">
         <div className="min-w-0">
-          <h1 className="text-[15px] font-bold text-white leading-tight flex items-center gap-2">
-            <Radar className="w-4 h-4 text-slate-500" />
-            Setup scanner
-          </h1>
+          <h2 className="text-[15px] font-bold text-white leading-tight">Signals</h2>
           <p className="text-[13px] text-slate-400 mt-0.5">
             Every minute: safety gates and clone filters, then{' '}
             {settings.scannerMode === 'simple' ? `momentum breakouts as they happen (not while 5m RSI is over ${MOMENTUM_MAX_RSI}), plus ` : ''}breakout, flag, RSI
-            rebound and pullback setups. Buy only when a card says Ready.
+            rebound and pullback setups. <span className="text-pos font-semibold">Ready</span> = a confirmed entry; <span className="text-white">Watching</span> = wait for the trigger on the card.
           </p>
         </div>
         <div className="lg:ml-auto flex items-center gap-2 flex-wrap">
@@ -283,69 +267,46 @@ export const SetupScanner: React.FC = () => {
             <span className={`dot ${enabled ? 'dot-live' : 'dot-idle'}`} />
             {scanning ? 'Scanning…' : lastScanAt ? `Scanned ${timeAgo(lastScanAt)} · ${candidateCount} tokens` : enabled ? 'Starting…' : 'Paused'}
           </span>
-          <button type="button" onClick={() => setAlerts(!alerts)} className="btn btn-secondary" title="Sound, vibration and a notification when a setup becomes ready">
+          <button type="button" onClick={() => setAlerts(!alerts)} className="btn btn-sm btn-secondary" title="Sound, vibration and a notification when a setup becomes ready">
             {alerts ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
             {alerts ? 'Alerts on' : 'Alerts off'}
           </button>
           <button
             type="button"
-            onClick={toggleAutoBuy}
-            className={`btn btn-secondary ${settings.scannerAutoBuy ? 'text-pos' : ''}`}
-            title={`Buy Ready signals automatically: $${settings.buyAmountUsd} each, at most ${settings.maxPositions} open, score ≥ ${minEntryScore(settings.scannerMode)}, sell-back test passed, within the daily loss limit`}
-          >
-            {settings.scannerAutoBuy ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
-            {settings.scannerAutoBuy ? 'Auto-buy on' : 'Auto-buy off'}
-          </button>
-          <button
-            type="button"
             onClick={() => updateSettings({ scannerMode: settings.scannerMode === 'simple' ? 'strict' : 'simple' })}
-            className="btn btn-secondary"
+            className="btn btn-sm btn-secondary"
             title={`Simple buys 5m momentum breakouts as they happen (more trades), skipping them while RSI is over ${MOMENTUM_MAX_RSI}. Strict waits for a retest, flag, RSI rebound or pullback (fewer trades).`}
           >
             <Gauge className="w-3.5 h-3.5" />
             {settings.scannerMode === 'simple' ? 'Mode: Simple' : 'Mode: Strict'}
           </button>
-          <button type="button" onClick={() => void scanNow()} disabled={scanning} className="btn btn-secondary">
+          <button type="button" onClick={() => void scanNow()} disabled={scanning || !enabled} className="btn btn-sm btn-secondary">
             <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />
             Scan now
           </button>
-          <button type="button" onClick={() => setEnabled(!enabled)} className={enabled ? 'btn btn-secondary' : 'btn btn-primary'}>
+          <button
+            type="button"
+            onClick={() => setEnabled(!enabled)}
+            disabled={settings.scannerAutoBuy}
+            className="btn btn-sm btn-ghost"
+            title={settings.scannerAutoBuy ? 'Stop auto trade first' : enabled ? 'Pause scanning' : 'Resume scanning'}
+          >
             {enabled ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            {enabled ? 'Pause' : 'Start'}
+            {enabled ? 'Pause' : 'Resume'}
           </button>
         </div>
       </div>
 
-      <div className="panel-2 px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-400">
-        <span>
-          <span className="text-pos font-semibold">{ready.length}</span> ready
-        </span>
-        <span>
-          <span className="text-white font-semibold">{watching.length}</span> watching
-        </span>
-        <span>
-          <span className="text-slate-300 font-semibold">{rejected.length}</span> rejected
-        </span>
-        <span className="sm:ml-auto">
-          Buy size ${settings.buyAmountUsd} ·{' '}
-          <span className={settings.paperTrading ? 'text-warn' : 'text-neg'}>{settings.paperTrading ? 'paper' : 'live'}</span> · TP +
-          {Math.min(50, Math.max(10, settings.takeProfitPercent))}% · stop ≤ 12% · profit lock +{settings.profitLockTriggerPercent}% → +
-          {settings.profitLockPercent}% · auto-buy{' '}
-          <span className={settings.scannerAutoBuy ? 'text-pos' : 'text-slate-500'}>{settings.scannerAutoBuy ? `on, max ${settings.maxPositions} positions` : 'off'}</span>
-        </span>
-      </div>
-
       {error && <p className="panel-2 px-4 py-3 text-[13px] text-warn">{error}</p>}
 
-      <SmartWallets />
-
       <div className="space-y-2">
-        <h2 className="text-[13px] font-bold text-white">
+        <h3 className="text-[13px] font-bold text-white">
           Ready to enter <span className="text-slate-500 font-normal">({ready.length})</span>
-        </h2>
+        </h3>
         {ready.length === 0 ? (
           <p className="panel px-4 py-5 text-[13px] text-slate-400">
-            Nothing is ready. Entries only appear when a setup confirms; the scanner checks again every minute{alerts ? ' and alerts you' : ''}.
+            Nothing is ready right now. That is normal: most of the day no token passes every gate. The scanner checks again every minute
+            {alerts ? ' and alerts you' : ''}; when auto trade is on, Ready signals are bought for you.
           </p>
         ) : (
           ready.map((s) => <SignalCard key={s.id} signal={s} />)
@@ -354,9 +315,9 @@ export const SetupScanner: React.FC = () => {
 
       {watching.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-[13px] font-bold text-white">
+          <h3 className="text-[13px] font-bold text-white">
             Watching <span className="text-slate-500 font-normal">({watching.length})</span>
-          </h2>
+          </h3>
           {watching.map((s) => (
             <SignalCard key={s.id} signal={s} />
           ))}
@@ -379,6 +340,8 @@ export const SetupScanner: React.FC = () => {
           </ul>
         </details>
       )}
+
+      <SmartWallets />
     </section>
   );
 };

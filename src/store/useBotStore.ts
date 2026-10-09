@@ -25,6 +25,7 @@ import { CoinService } from '../services/coin.service';
 import { recordTradeForChart } from '../services/chart.service';
 import { PumpFunService } from '../services/pumpfun.service';
 import { BridgeService } from '../services/bridge.service';
+import { DEFAULT_AI_MODEL, resolveAiModel } from '../lib/ai-models';
 
 type ExitReason = BotTradeHistory['exitReason'];
 
@@ -201,6 +202,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   aiGateEnabled: true,
   aiMinConfidence: 45,
   aiAdjustTargets: true,
+  aiModel: DEFAULT_AI_MODEL,
   preset: 'balanced',
   liveSigner: 'wallet',
   dailyLossLimitUsd: 100,
@@ -265,7 +267,7 @@ export const useBotStore = create<BotState>()(
           id: uid('log-init'),
           timestamp: nowTime(),
           type: 'info',
-          message: 'CoinScope bot engine ready. Paper trading is ON by default. Connect a wallet, then switch to live under Bot > Settings.',
+          message: 'CoinScope ready. Paper trading is on by default: press Start auto trade to begin, and switch to live under Settings when the results convince you.',
         },
       ],
       recentCoins: [],
@@ -962,6 +964,8 @@ export const useBotStore = create<BotState>()(
           liveSigner: s.settings.liveSigner,
           liveReady: s.settings.paperTrading ? null : !!signerFor(s.settings.liveSigner),
           todayRealizedPnlUsd: Number(s.getTodayRealizedPnl().toFixed(2)),
+          aiModel: s.settings.aiModel,
+          autoTrade: { on: s.settings.scannerAutoBuy, mode: s.settings.scannerMode, aiGate: s.settings.aiGateEnabled },
           stream: { connected: s.isWsConnected, latencyMs: s.wsLatencyMs, eventsPerMinute: s.wsEventsPerMinute },
           settings: { ...rest, whitelistedSymbols },
           openPositions: s.positions.length,
@@ -995,6 +999,7 @@ export const useBotStore = create<BotState>()(
             phantomWalletConnected: false,
             // Older sessions persisted the public mainnet URL, which now refuses browser requests.
             solanaRpcUrl: resolveRpcUrl(p.settings?.solanaRpcUrl) === RPC_PROXY ? DEFAULT_SOLANA_RPC : p.settings!.solanaRpcUrl,
+            aiModel: resolveAiModel(p.settings?.aiModel),
           },
           isActive: false,
         };

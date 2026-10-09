@@ -2,6 +2,36 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { CoinAnalysis, CoinData } from '../types/coin';
 import { AiDecision, BotSettings, BotStats } from '../types/bot';
 
+/** Compact scanner signal sent to the gate (mirrors ScannerSignalBrief plus the gate facts). */
+export interface SignalForGate {
+  symbol: string;
+  name: string;
+  mint: string;
+  setup?: string;
+  reason: string;
+  priceUsd: number;
+  liquidityUsd: number;
+  marketCapUsd: number;
+  ageHours: number;
+  volume1hUsd: number;
+  buys1h: number;
+  sells1h: number;
+  rsi?: number;
+  entryLow?: number;
+  entryHigh?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  slPercent?: number;
+  tpPercent?: number;
+  invalidation?: string;
+  costPercent?: number;
+  netRewardRisk?: number;
+  smartWallets?: number;
+  gates?: { top10Pct: number; maxHolderPct: number; insiderPct: number; devPct: number; holders: number };
+  score?: { safety: number; holders: number; liquidity: number; momentum: number; social: number; total: number };
+  sellBack?: { sellable: boolean; roundTripPct?: number };
+}
+
 export type ChatMessageParam = Anthropic.MessageParam;
 export type ChatContentBlock = Anthropic.ContentBlock;
 export type ChatToolUseBlock = Anthropic.ToolUseBlock;
@@ -34,8 +64,8 @@ async function postJson<T>(url: string, body: unknown, timeoutMs = 30_000): Prom
 
 export const AIService = {
   /** Full scorecard for a coin. Uses Claude when the server has credentials, heuristics otherwise. */
-  async analyzeCoin(coin: CoinData): Promise<CoinAnalysis & { source?: 'ai' | 'heuristic'; note?: string }> {
-    const data = await postJson<{ analysis: CoinAnalysis; source?: 'ai' | 'heuristic'; note?: string }>('/api/ai/analyze', { coin }, 45_000);
+  async analyzeCoin(coin: CoinData, model?: string): Promise<CoinAnalysis & { source?: 'ai' | 'heuristic'; note?: string }> {
+    const data = await postJson<{ analysis: CoinAnalysis; source?: 'ai' | 'heuristic'; note?: string }>('/api/ai/analyze', { coin, model }, 45_000);
     return { ...data.analysis, source: data.source, note: data.note };
   },
 
@@ -46,7 +76,7 @@ export const AIService = {
     context: { openPositions: number; stats: BotStats }
   ): Promise<AiDecision> {
     try {
-      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context }, 25_000);
+      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context, model: settings.aiModel }, 25_000);
       if (data?.note && data.decision) data.decision.reason = `${data.decision.reason} (${data.note})`;
       return data.decision;
     } catch (err: any) {
@@ -59,10 +89,33 @@ export const AIService = {
     }
   },
 
-  /** One model turn of the control chat. The caller executes any tool_use blocks and calls again. */
-  async chatTurn(messages: ChatMessageParam[], snapshot: unknown): Promise<ChatTurnResult> {
+  /**
+   * Buy / skip review of a scanner signal before the auto-buy. Unlike decideSnipe, a transport
+   * failure returns `null` so the caller can decide whether to trade on the scanner alone.
+   */
+  async decideSignal(
+    signal: SignalForGate,
+    settings: BotSettings,
+    context: { openPositions: number; stats: BotStats; todayPnlUsd: number; capitalUsd: number | null }
+  ): Promise<(AiDecision & { sizeFactor?: number; available: boolean }) | null> {
     try {
-      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, snapshot }, 90_000);
+      const data = await postJson<{ decision: AiDecision & { sizeFactor?: number }; note?: string; available?: boolean }>(
+        '/api/ai/decide',
+        { signal, settings, context, model: settings.aiModel },
+        25_000
+      );
+      if (!data?.decision) return null;
+      if (data.note) data.decision.reason = `${data.decision.reason} (${data.note})`;
+      return { ...data.decision, available: data.available !== false };
+    } catch {
+      return null;
+    }
+  },
+
+  /** One model turn of the control chat. The caller executes any tool_use blocks and calls again. */
+  async chatTurn(messages: ChatMessageParam[], snapshot: unknown, model?: string): Promise<ChatTurnResult> {
+    try {
+      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, snapshot, model }, 90_000);
       return data;
     } catch (err: any) {
       return { content: [], stop_reason: null, error: err?.message || 'AI chat failed' };

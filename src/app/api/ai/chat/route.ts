@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
-import { AI_MODEL, TRADING_SYSTEM_PROMPT, getAnthropic, hasAnthropicCredentials } from '@/lib/ai-server';
+import { TRADING_SYSTEM_PROMPT, getAnthropic, hasAnthropicCredentials, modelFor } from '@/lib/ai-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,6 +78,11 @@ const BOT_TOOLS: Anthropic.Tool[] = [
         scannerAutoBuy: {
           type: 'boolean',
           description: 'Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.',
+        },
+        aiModel: {
+          type: 'string',
+          enum: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
+          description: 'Claude model used by the trade gate and this chat.',
         },
         minLiquidityUsd: { type: 'number', minimum: 0 },
         maxTokenAgeMinutes: { type: 'number', minimum: 0 },
@@ -186,10 +191,12 @@ export async function POST(req: NextRequest) {
 
   let messages: Anthropic.MessageParam[];
   let snapshot: unknown;
+  let model: string;
   try {
     const body = await req.json();
     messages = Array.isArray(body?.messages) ? body.messages : [];
     snapshot = body?.snapshot;
+    model = modelFor(body?.model);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
@@ -198,7 +205,7 @@ export async function POST(req: NextRequest) {
   try {
     const client = getAnthropic();
     const response = await client.messages.create({
-      model: AI_MODEL,
+      model,
       max_tokens: 4096,
       system: [
         { type: 'text', text: CONTROL_PROMPT, cache_control: { type: 'ephemeral' } },

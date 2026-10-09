@@ -65,6 +65,8 @@ export interface BotSettings {
   aiMinConfidence: number;
   /** Let the AI override TP / SL with its suggested values. */
   aiAdjustTargets: boolean;
+  /** Claude model id used for the gate, the scorecard and the copilot (see lib/ai-models.ts). */
+  aiModel: string;
   /** Which risk preset the filters came from ('custom' once the user edits a field). */
   preset: StrategyPreset;
   /** Which wallet signs live trades. */

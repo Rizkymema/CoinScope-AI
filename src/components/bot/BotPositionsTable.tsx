@@ -34,9 +34,7 @@ export const BotPositionsTable: React.FC = () => {
         </h3>
         <span className="text-xs text-slate-500">
           {settings.autoSell
-            ? `Auto TP +${settings.takeProfitPercent}% · SL −${settings.stopLossPercent}%${
-                settings.trailingStopPercent ? ` · trail ${settings.trailingStopPercent}%` : ''
-              }`
+            ? `Exits automatic · each position keeps its own TP / SL${settings.trailingStopPercent ? ` · trail ${settings.trailingStopPercent}%` : ''}`
             : 'Auto-sell off'}
         </span>
       </div>
@@ -48,7 +46,7 @@ export const BotPositionsTable: React.FC = () => {
           <p className="text-[13px] text-slate-400 mt-1 max-w-sm leading-relaxed">
             {isActive
               ? 'The bot is watching the launch stream. Positions appear here once a token clears your filters and the AI gate.'
-              : 'Start the bot, or buy a token manually from the New Launches feed or the AI chat.'}
+              : 'Start auto trade and the scanner buys confirmed signals for you, or buy a Ready signal below or a token from Market.'}
           </p>
 
           {isActive && topSkip && (

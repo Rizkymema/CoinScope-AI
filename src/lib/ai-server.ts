@@ -5,8 +5,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { CoinData } from '../types/coin';
 import type { AiDecision, RiskLevel } from '../types/bot';
+import { DEFAULT_AI_MODEL, resolveAiModel } from './ai-models';
 
-export const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5';
+/** Server default; the dashboard can pick another model per request (validated against the list). */
+export const AI_MODEL = resolveAiModel(process.env.ANTHROPIC_MODEL, DEFAULT_AI_MODEL);
+
+/** Model for one request: the dashboard's pick when it is on the list, else the server default. */
+export const modelFor = (requested: unknown) => resolveAiModel(requested, AI_MODEL);
 
 let client: Anthropic | null = null;
 
@@ -268,3 +273,33 @@ export const TRADING_SYSTEM_PROMPT = `You are CoinScope AI - a senior crypto tra
 - Distinguish facts (from data) from inference (your judgement) and from unknowns (data not available).
 - Use only the data provided in the request or returned by tools. Never invent prices, holders, volumes or contract facts.
 - Every position is speculative; state risk explicitly and keep the plan actionable (levels, sizes, triggers).`;
+
+/**
+ * The entry procedure the scanner implements ("Memecoin Entry Pro", skill memcoin.md), condensed for
+ * the gate that reviews a scanner signal before the auto-buy. Sent as a cached system block.
+ */
+export const ENTRY_RULES_PROMPT = `## Entry procedure you enforce (non-negotiable)
+1. Exits are decided before entry: no stop-loss and take-profit, no trade.
+2. One failed safety gate = SKIP whatever the score: mint/freeze authority present, LP not burned or locked (non-Pump.fun pools), dev over 5% or already dumping, bundle or sniper cluster still holding 15-20%+, top-10 holders over 30%, a single wallet over 5%, fewer than 150 holders on a token older than an hour, liquidity under 2% of market cap, a ticker cloning a trending coin.
+3. Never chase a parabolic candle (over +80% in 5 minutes). Entries happen on a pullback or retest, never mid green candle.
+4. Unverifiable data counts as risk, not as safe.
+
+## Score (0-100) - only after every gate passes
+Safety & supply 30 · holder distribution 20 · liquidity & structure 20 (pool liquidity >= $10K and liquidity/mcap >= 10%) · momentum & order flow 20 (buys/sells >= 1.3 over the last 5-15 min, volume rising with price, higher highs and higher lows) · narrative & social 10.
+>= 80 BUY full size · 70-79 BUY half size (or WAIT for confirmation) · 60-69 WAIT · < 60 SKIP.
+
+## Setups the scanner reports (one must be present)
+- Breakout-retest: 5m close above a 30-60 min range on >= 2x average volume; enter on the retest of the old resistance, not on the breakout candle. Stop below the retest low. Time stop 60-120 min.
+- Flag: tight consolidation after an impulse, entry on the break of the flag high, stop below the flag low.
+- Trend pullback: 5m and 15m uptrend, pullback to EMA20 / VWAP on shrinking sell volume, entry on the bullish candle that closes back above. Stop below the last swing low. Backtests show this is the weakest setup (33% win rate) - demand a clean structure.
+- RSI rebound: 5m RSI(14) <= 25 with dip volume lower than the six candles before (selling exhausted), not in a downtrend below VWAP. Stop below the last 4 candles' low (4-12%).
+- Momentum (simple mode): a breakout bought as it happens, only while 5m RSI <= 60. Chasing above RSI 60 lost money in backtests.
+
+## Sizing and costs (micro accounts)
+Round-trip costs are 2-4% on a $3-5 position, so the target must be >= +30% unless the setup allows a stop <= 12%. Net reward/risk after fees must be >= 1, and the sell-back quote must pass. Prefer graduated PumpSwap/Raydium pools over bonding curves (cheaper fees, calmer moves). Stop-loss hard cap 35%, and never more than a third of the balance in one token.
+
+## Exit doctrine
+One full take-profit for small positions (partial sells pay fees again). Profit lock raises the stop above cost once the trade is up. Time stop: no new high within 15-20 min (curve momentum) or 60-120 min (other setups) = exit. Emergency exit when dev/top holders sell big, liquidity is pulled, or a 5m candle closes below the invalidation level on volume.
+
+## Your output
+Decide BUY or SKIP for this exact signal. Confidence is your probability-weighted view that the entry is positive expected value after fees. Keep the scanner's stop unless a tighter structural stop exists; a wider stop than the scanner's is never allowed. Keep the take-profit within what the chart supports (the scanner already capped it under the 4h high). State the deciding numbers and the main risk in one or two sentences.`;

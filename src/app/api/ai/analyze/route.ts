@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
 import {
-  AI_MODEL,
+  modelFor,
   TRADING_SYSTEM_PROMPT,
   describeCoin,
   extractText,
@@ -61,9 +61,11 @@ export async function POST(req: NextRequest) {
   const limited = rateLimit(req, 'ai-analyze', 60, 60_000);
   if (limited) return limited;
   let coin: Partial<CoinData>;
+  let model: string;
   try {
     const body = await req.json();
     coin = body?.coin || {};
+    model = modelFor(body?.model);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
   try {
     const client = getAnthropic();
     const response = await client.messages.create({
-      model: AI_MODEL,
+      model,
       max_tokens: 2048,
       system: TRADING_SYSTEM_PROMPT,
       output_config: { effort: 'medium', format: { type: 'json_schema', schema: ANALYSIS_SCHEMA } },

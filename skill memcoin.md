@@ -50,7 +50,7 @@ Prosedur ini mengubah "feeling" jadi checklist. Tujuannya bukan menebak koin yan
 
 Jika dashboard CoinScope tidak online (tool bot gagal), tetap jalankan langkah 2-6 dan berikan rencana manual ke user.
 
-**Tab Scanner di CoinScope** menjalankan langkah 2-6 otomatis setiap menit selama aplikasi terbuka (di HP juga): gate RugCheck (termasuk minimal 150 holder), tolak clone/parabolik, deteksi Breakout-Retest, Flag, RSI Rebound, dan Trend Pullback (mode Simple juga membeli breakout momentum, tapi tidak saat RSI 5m > 60), lalu tes jual-kembali lewat Jupiter. Daftar **Smart wallets** di tab itu menambahkan token yang dipegang wallet trader pilihan ke kandidat scan. Kartu berlabel **Ready** = setup terkonfirmasi dan skor ≥ 70; tombol Beli memakai SL/TP dari sinyal itu. Kartu **Watching** = tunggu trigger yang tertulis, jangan beli dulu.
+**Tab Auto Trade di CoinScope** menjalankan langkah 2-6 otomatis setiap menit selama aplikasi terbuka (di HP juga): gate RugCheck (termasuk minimal 150 holder), tolak clone/parabolik, deteksi Breakout-Retest, Flag, RSI Rebound, dan Trend Pullback (mode Simple juga membeli breakout momentum, tapi tidak saat RSI 5m > 60), lalu tes jual-kembali lewat Jupiter. Daftar **Smart wallets** di tab itu menambahkan token yang dipegang wallet trader pilihan ke kandidat scan. Kartu berlabel **Ready** = setup terkonfirmasi dan skor ≥ 70; tombol Beli memakai SL/TP dari sinyal itu. Kartu **Watching** = tunggu trigger yang tertulis, jangan beli dulu. Saat **Start auto trade** aktif dan *AI review* menyala, setiap sinyal Ready dikirim ke Claude (model dipilih di Settings) yang menerapkan prosedur ini sebelum pembelian; Claude hanya boleh memperketat SL, tidak melebarkan.
 
 ---
 
@@ -153,7 +153,7 @@ Tidak ada setup yang cocok = tidak ada entry. Semua entry dilakukan di **pullbac
 
 ### Konfirmasi tambahan (menaikkan keyakinan, bukan syarat tunggal)
 - Holder unik naik saat harga konsolidasi (akumulasi).
-- Wallet yang secara historis profit (smart money) ikut masuk - cek di GMGN/Photon. Masukkan wallet itu ke daftar **Smart wallets** di tab Scanner: kartu sinyal menampilkan berapa yang masih memegang, dan menambah skor sosial (+4 per wallet, maks 10).
+- Wallet yang secara historis profit (smart money) ikut masuk - cek di GMGN/Photon. Masukkan wallet itu ke daftar **Smart wallets** di tab Auto Trade: kartu sinyal menampilkan berapa yang masih memegang, dan menambah skor sosial (+4 per wallet, maks 10).
 - Wallet profit di leaderboard (24 jam / 7 hari) yang **terus membeli tanpa menjual** satu token = akumulasi, layak masuk watchlist. Holding saja bukan alasan beli: token tetap harus lolos gate dan punya setup Ready.
 - Sesi ramai: volume memecoin umumnya paling tinggi di sesi US, sekitar 20.00-03.00 WIB.
 

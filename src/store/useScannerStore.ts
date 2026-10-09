@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { minEntryScore, ScannerService, ScanSignal } from '../services/scanner.service';
 import { AudioService } from '../services/audio.service';
 import { SolPriceService } from '../services/solprice.service';
+import { AIService, SignalForGate } from '../services/ai.service';
 import { useBotStore } from './useBotStore';
 import { ScannerSignalBrief, setScannerSummary } from '../lib/scanner-status';
 
@@ -11,6 +12,9 @@ import { ScannerSignalBrief, setScannerSummary } from '../lib/scanner-status';
  */
 
 const SCAN_INTERVAL_MS = 60_000;
+/** A scan this overdue means the timer died (throttled tab, failed promise): the watchdog restarts it. */
+const STALE_SCAN_MS = 3 * SCAN_INTERVAL_MS;
+const WATCHDOG_MS = 30_000;
 const PREFS_KEY = 'coinscope:scanner';
 /** The micro-account rule from the skill: a wider stop does not fit a $3-5 position. */
 const MAX_STOP_PERCENT = 12;
@@ -25,11 +29,16 @@ interface ScannerState {
   error: string | null;
   /** Mints that were ready on the last scan, so an alert fires once per new signal. */
   readyIds: string[];
+  /** When auto trade was switched on in this tab (uptime display); null while off. */
+  autoSince: number | null;
 
   init: () => void;
   setEnabled: (on: boolean) => void;
   setAlerts: (on: boolean) => Promise<void>;
   scanNow: () => Promise<void>;
+  /** Scanner on + auto-buy on: the one switch the Auto Trade page exposes. */
+  startAutoTrade: () => void;
+  stopAutoTrade: () => void;
 }
 
 function readPrefs(): { enabled: boolean; alerts: boolean } {
@@ -83,6 +92,40 @@ const ENTRY_RESERVE_SOL = 0.005;
 const autoBuyAt = new Map<string, number>();
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
 
+/** Half size is only worth it when the smaller order still clears Solana's fixed costs comfortably. */
+const MIN_HALF_SIZE_USD = 10;
+
+function toGateSignal(s: ScanSignal): SignalForGate {
+  return {
+    symbol: s.coin.symbol,
+    name: s.coin.name,
+    mint: s.id,
+    setup: s.setup,
+    reason: s.reason,
+    priceUsd: s.priceUsd,
+    liquidityUsd: Math.round(s.liquidityUsd),
+    marketCapUsd: Math.round(s.marketCapUsd),
+    ageHours: Math.round(s.ageHours * 10) / 10,
+    volume1hUsd: Math.round(s.volume1hUsd),
+    buys1h: s.buys1h,
+    sells1h: s.sells1h,
+    rsi: s.rsi !== undefined ? Math.round(s.rsi) : undefined,
+    entryLow: s.entryLow,
+    entryHigh: s.entryHigh,
+    stopPrice: s.stopPrice,
+    targetPrice: s.targetPrice,
+    slPercent: round1(s.slPercent),
+    tpPercent: round1(s.tpPercent),
+    invalidation: s.invalidation,
+    costPercent: s.costPercent !== undefined ? round1(s.costPercent) : undefined,
+    netRewardRisk: s.netRewardRisk !== undefined ? round1(s.netRewardRisk) : undefined,
+    smartWallets: s.smartWallets,
+    gates: s.gates ? { top10Pct: round1(s.gates.top10Pct), maxHolderPct: round1(s.gates.maxHolderPct), insiderPct: round1(s.gates.insiderPct), devPct: round1(s.gates.devPct), holders: s.gates.holders } : undefined,
+    score: s.score,
+    sellBack: s.swap ? (s.swap.sellable ? { sellable: true, roundTripPct: round1(s.swap.roundTripPct) } : { sellable: false }) : undefined,
+  };
+}
+
 /**
  * At most one entry per scan, and only while every guard holds: the setting is on, there is room
  * under maxPositions, the daily loss limit is not hit, the signal is Ready with a passing sell-back
@@ -134,11 +177,49 @@ async function autoBuy(ready: ScanSignal[]) {
     }
   }
 
+  let amountUsd = settings.buyAmountUsd;
+  let tp = round1(candidate.tpPercent);
+  let sl = round1(candidate.slPercent);
+  let reason = `scanner auto-buy ${candidate.setup} ${candidate.score?.total}`;
+
+  // Final review by Claude. The scanner's stop is the widest allowed; the model may only tighten it.
+  if (settings.aiGateEnabled) {
+    const solPrice = bot.solPriceUsd || SolPriceService.getCached();
+    const capitalUsd = settings.paperTrading
+      ? bot.walletBalance
+      : solPrice > 0
+      ? ((settings.liveSigner === 'bot' ? bot.botWallet.solBalance ?? 0 : settings.solBalance) + (settings.liveSigner === 'bot' && settings.phantomWalletConnected ? settings.solBalance : 0)) * solPrice
+      : null;
+    const verdict = await AIService.decideSignal(toGateSignal(candidate), settings, {
+      openPositions: bot.positions.length,
+      stats: bot.getStats(),
+      todayPnlUsd: Number(bot.getTodayRealizedPnl().toFixed(2)),
+      capitalUsd: capitalUsd === null ? null : Math.round(capitalUsd * 100) / 100,
+    });
+    if (!verdict || !verdict.available) {
+      // Not a verdict on the token: the signal stays eligible for the next scan.
+      bot.log('warning', `[AI GATE] No answer from Claude (${verdict?.reason || 'network error'}) - ${candidate.coin.symbol} not bought. Check the AI settings.`, { coinSymbol: candidate.coin.symbol });
+      return;
+    }
+    useBotStore.setState({
+      lastAiDecision: { action: verdict.action, confidence: verdict.confidence, reason: verdict.reason, riskLevel: verdict.riskLevel, source: verdict.source, model: verdict.model, symbol: candidate.coin.symbol, at: Date.now() },
+    });
+    const approved = verdict.action === 'buy' && verdict.confidence >= settings.aiMinConfidence;
+    bot.log('ai', `[AI ${verdict.model || 'claude'}] ${candidate.coin.symbol}: ${verdict.action.toUpperCase()} (${verdict.confidence}%) - ${verdict.reason}`, { coinSymbol: candidate.coin.symbol });
+    if (!approved) {
+      autoBuyAt.set(candidate.id, Date.now());
+      return;
+    }
+    if (settings.aiAdjustTargets) {
+      if (verdict.suggestedStopLossPercent) sl = round1(Math.max(4, Math.min(sl, verdict.suggestedStopLossPercent)));
+      if (verdict.suggestedTakeProfitPercent) tp = round1(Math.max(tp * 0.8, Math.min(tp * 1.5, verdict.suggestedTakeProfitPercent)));
+    }
+    if (verdict.sizeFactor === 0.5 && settings.buyAmountUsd * 0.5 >= MIN_HALF_SIZE_USD) amountUsd = Math.round(settings.buyAmountUsd * 0.5);
+    reason = `${reason}, AI ${verdict.confidence}%`;
+  }
+
   autoBuyAt.set(candidate.id, Date.now());
-  const r = await bot.manualSnipeCoin(candidate.coin, settings.buyAmountUsd, `scanner auto-buy ${candidate.setup} ${candidate.score?.total}`, {
-    tp: round1(candidate.tpPercent),
-    sl: round1(candidate.slPercent),
-  });
+  const r = await bot.manualSnipeCoin(candidate.coin, amountUsd, reason, { tp, sl });
   bot.log(r.success ? 'buy' : 'warning', `[AUTO-BUY] ${candidate.coin.symbol}: ${r.message}`, { coinSymbol: candidate.coin.symbol });
   if (!r.success) {
     useBotStore.setState({ latestToastNotification: { title: `Auto-buy failed: ${candidate.coin.symbol}`, description: r.message, type: 'error', coinSymbol: candidate.coin.symbol } });
@@ -163,13 +244,38 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
     lastScanAt: null,
     error: null,
     readyIds: [],
+    autoSince: null,
 
     init: () => {
       if (initialized || typeof window === 'undefined') return;
       initialized = true;
       const prefs = readPrefs();
-      set(prefs);
-      if (prefs.enabled) void get().scanNow();
+      const autoOn = useBotStore.getState().settings.scannerAutoBuy;
+      // Auto-buy that was left on must keep scanning, whatever the scanner preference says.
+      set({ ...prefs, enabled: prefs.enabled || autoOn, autoSince: autoOn ? Date.now() : null });
+      if (get().enabled) void get().scanNow();
+
+      const restartIfStale = () => {
+        const s = get();
+        if (s.enabled && !s.scanning && s.lastScanAt && Date.now() - s.lastScanAt > STALE_SCAN_MS) void s.scanNow();
+      };
+      setInterval(restartIfStale, WATCHDOG_MS);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') restartIfStale();
+      });
+    },
+
+    startAutoTrade: () => {
+      useBotStore.getState().updateSettings({ scannerAutoBuy: true });
+      set({ autoSince: Date.now() });
+      get().setEnabled(true);
+      useBotStore.getState().log('info', '[AUTO TRADE] On: the scanner buys Ready signals it confirms (and Claude approves, when the AI gate is on).');
+    },
+
+    stopAutoTrade: () => {
+      useBotStore.getState().updateSettings({ scannerAutoBuy: false });
+      set({ autoSince: null });
+      useBotStore.getState().log('info', '[AUTO TRADE] Off. Open positions are still managed; the scanner keeps listing signals.');
     },
 
     setEnabled: (on) => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Bot, Globe, Key, Radar, TrendingUp, X } from 'lucide-react';
+import { Activity, Bot, Globe, Key, SlidersHorizontal, TrendingUp, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SearchPanel } from '@/components/SearchPanel';
@@ -12,20 +12,20 @@ import { FeaturedCoinsCarousel } from '@/components/FeaturedCoinsCarousel';
 import { FilterTabs, FilterType } from '@/components/FilterTabs';
 import { NewCoinsLiveFeed } from '@/components/NewCoinsLiveFeed';
 import { LiveMarketTicker } from '@/components/LiveMarketTicker';
-import { AutoBotDashboard } from '@/components/AutoBotDashboard';
-import { SetupScanner } from '@/components/SetupScanner';
+import { AutoTradePage } from '@/components/AutoTradePage';
+import { BotSettingsPanel } from '@/components/bot/BotSettingsPanel';
 import { useScannerStore } from '@/store/useScannerStore';
 import { LoginModal } from '@/components/LoginModal';
 import { useBotStore } from '@/store/useBotStore';
 import { useKeepAlive } from '@/hooks/useKeepAlive';
 
-type Tab = 'trending' | 'new' | 'scanner' | 'bot';
+type Tab = 'trending' | 'new' | 'auto' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: typeof TrendingUp }[] = [
   { id: 'trending', label: 'Market', icon: TrendingUp },
   { id: 'new', label: 'New Launches', icon: Globe },
-  { id: 'scanner', label: 'Scanner', icon: Radar },
-  { id: 'bot', label: 'Bot', icon: Bot },
+  { id: 'auto', label: 'Auto Trade', icon: Bot },
+  { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
 ];
 
 export default function DashboardPage() {
@@ -33,7 +33,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>('trending');
 
   const {
-    isBotActive,
+    isSniperActive,
     isWsConnected,
     solPriceUsd,
     toast,
@@ -45,7 +45,7 @@ export default function DashboardPage() {
     setWalletDialogOpen,
   } = useBotStore(
     useShallow((s) => ({
-      isBotActive: s.isActive,
+      isSniperActive: s.isActive,
       isWsConnected: s.isWsConnected,
       solPriceUsd: s.solPriceUsd,
       toast: s.latestToastNotification,
@@ -59,11 +59,11 @@ export default function DashboardPage() {
   );
   const setIsLoginOpen = setWalletDialogOpen;
   const readyCount = useScannerStore((s) => s.readyIds.length);
+  const autoTradeOn = settings.scannerAutoBuy;
 
   // Entries and exits run in this tab: keep it awake (screen, and an inaudible tone so the browser
   // does not throttle or freeze it when hidden) and warn before closing it.
-  useKeepAlive(isBotActive || hasLivePositions || settings.scannerAutoBuy);
-
+  useKeepAlive(isSniperActive || hasLivePositions || autoTradeOn);
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
   useEffect(() => {
@@ -72,6 +72,19 @@ export default function DashboardPage() {
       // The scanner reads buy size and fees from the bot settings, so it starts after they load.
       useScannerStore.getState().init();
     });
+  }, []);
+
+  // Other pages can ask for a tab (e.g. "Wallet & mode settings" on the Auto Trade page).
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<Tab>).detail;
+      if (TABS.some((t) => t.id === tab)) {
+        setActiveTab(tab);
+        window.scrollTo({ top: 0 });
+      }
+    };
+    window.addEventListener('coinscope:tab', onTab);
+    return () => window.removeEventListener('coinscope:tab', onTab);
   }, []);
 
   useEffect(() => {
@@ -115,12 +128,12 @@ export default function DashboardPage() {
               >
                 <Icon className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">{label}</span>
-                {id === 'bot' && positionsCount > 0 && (
-                  <span className="ml-0.5 px-1.5 rounded-[5px] bg-signal/15 text-signal text-[10px] font-bold">
+                {id === 'auto' && positionsCount > 0 && (
+                  <span className="ml-0.5 px-1.5 rounded-[5px] bg-signal/15 text-signal text-[10px] font-bold" title={`${positionsCount} open position(s)`}>
                     {positionsCount}
                   </span>
                 )}
-                {id === 'scanner' && readyCount > 0 && (
+                {id === 'auto' && readyCount > 0 && (
                   <span className="ml-0.5 px-1.5 rounded-[5px] bg-pos/15 text-pos text-[10px] font-bold" title={`${readyCount} setup(s) ready`}>
                     {readyCount}
                   </span>
@@ -131,7 +144,7 @@ export default function DashboardPage() {
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             {solPriceUsd > 0 && (
-              <span className="hidden md:flex items-baseline gap-1.5 text-xs">
+              <span className="hidden md:flex items-baseline gap-1.5 text-xs" title="Price of 1 SOL in US dollars">
                 <span className="text-slate-500">SOL</span>
                 <span className="font-semibold text-slate-200 font-mono">${solPriceUsd.toFixed(2)}</span>
               </span>
@@ -139,10 +152,10 @@ export default function DashboardPage() {
 
             <span
               className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400"
-              title={isWsConnected ? 'Launch stream connected' : 'Launch stream reconnecting'}
+              title={autoTradeOn ? 'Auto trade is buying confirmed signals' : isWsConnected ? 'Launch stream connected' : 'Launch stream reconnecting'}
             >
-              <span className={`dot ${isWsConnected ? 'dot-live' : 'dot-idle'}`} />
-              {isBotActive ? 'Bot running' : isWsConnected ? 'Streaming' : 'Offline'}
+              <span className={`dot ${autoTradeOn || isSniperActive ? 'dot-live' : isWsConnected ? 'dot-live' : 'dot-idle'}`} />
+              {autoTradeOn ? 'Auto trade on' : isSniperActive ? 'Sniper running' : isWsConnected ? 'Streaming' : 'Offline'}
             </span>
 
             <button
@@ -181,7 +194,7 @@ export default function DashboardPage() {
               </h1>
               <p className="text-[13px] text-slate-400 mt-0.5">
                 {activeTab === 'trending'
-                  ? 'Most active tokens across Solana and EVM pools, refreshed continuously.'
+                  ? 'Most active tokens across Solana and EVM pools, refreshed continuously. Click a token for its chart, trades and safety check.'
                   : 'Pump.fun mints and fresh DEX pools, newest first.'}
               </p>
             </div>
@@ -209,9 +222,17 @@ export default function DashboardPage() {
           </>
         )}
 
-        {activeTab === 'scanner' && <SetupScanner />}
+        {activeTab === 'auto' && <AutoTradePage />}
 
-        {activeTab === 'bot' && <AutoBotDashboard />}
+        {activeTab === 'settings' && (
+          <>
+            <div>
+              <h1 className="text-[15px] font-bold text-white leading-tight">Settings</h1>
+              <p className="text-[13px] text-slate-400 mt-0.5">Money and wallets, sizing and risk, the Claude model, and the connection. The launch sniper and MCP are at the bottom.</p>
+            </div>
+            <BotSettingsPanel />
+          </>
+        )}
       </main>
 
       <AIJudgeChat />
@@ -248,7 +269,7 @@ export default function DashboardPage() {
       {/* ---------------------------------------------------------------- footer */}
       <footer className="border-t border-line mt-10">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
-          <span>Data: PumpPortal · GeckoTerminal · DexScreener — Routing: Jupiter · PumpPortal</span>
+          <span>Data: PumpPortal · GeckoTerminal · DexScreener — Routing: Jupiter · PumpPortal — AI: Claude</span>
           <span>Speculative assets. Most new tokens go to zero.</span>
         </div>
       </footer>

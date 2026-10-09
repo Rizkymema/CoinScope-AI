@@ -4,6 +4,7 @@ import React from 'react';
 import { RotateCcw } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
+import { aiModelLabel } from '@/lib/ai-models';
 
 const Stat: React.FC<{
   label: string;
@@ -45,8 +46,6 @@ export const BotMetricsBar: React.FC = () => {
   const liveSol = settings.liveSigner === 'bot' ? botSol ?? 0 : settings.solBalance;
   const pnlPositive = stats.totalProfitUsd >= 0;
 
-  const platform =
-    settings.launchPlatform === 'pumpfun' ? 'Pump.fun' : settings.launchPlatform === 'dexscreener' ? 'DEX pools' : 'All sources';
 
   return (
     <div className="panel mt-4 grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-[rgba(255,255,255,0.06)]">
@@ -77,13 +76,13 @@ export const BotMetricsBar: React.FC = () => {
       <Stat
         label="Open positions"
         value={`${positions.length} / ${settings.maxPositions}`}
-        hint={settings.autoSell ? `TP +${settings.takeProfitPercent}% · SL −${settings.stopLossPercent}%` : 'Auto-sell off'}
+        hint={settings.autoSell ? `Profit lock +${settings.profitLockTriggerPercent}% → +${settings.profitLockPercent}%` : 'Auto-sell off'}
       />
       <Stat label="Win rate" value={`${stats.winRate.toFixed(0)}%`} hint={`${stats.winningTrades}W · ${stats.losingTrades}L`} />
       <Stat
-        label="Scanning"
-        value={platform}
-        hint={settings.targetChain === 'all' ? 'All chains' : `${settings.targetChain} only`}
+        label="AI review"
+        value={settings.aiGateEnabled ? aiModelLabel(settings.aiModel).replace('Claude ', '') : 'Off'}
+        hint={settings.aiGateEnabled ? `Buys need ≥ ${settings.aiMinConfidence}% confidence` : 'Scanner decides alone'}
       />
     </div>
   );

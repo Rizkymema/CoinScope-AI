@@ -71,7 +71,7 @@ export const AIJudgeChat: React.FC = () => {
     while (rounds < MAX_TOOL_ROUNDS) {
       rounds += 1;
       const snapshot = useBotStore.getState().getSnapshot();
-      const turn = await AIService.chatTurn(historyRef.current, snapshot);
+      const turn = await AIService.chatTurn(historyRef.current, snapshot, useBotStore.getState().settings.aiModel);
       if (turn.error) {
         const noKey = /ANTHROPIC_API_KEY/i.test(turn.error);
         if (noKey) setAiUnavailable(turn.error);

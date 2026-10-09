@@ -1,11 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Brain,
   Check,
   CheckCircle2,
+  Crosshair,
   DollarSign,
   FlaskConical,
   Loader2,
@@ -20,8 +21,11 @@ import {
 import { useBotStore, STRATEGY_PRESETS } from '@/store/useBotStore';
 import { ChainOption, LaunchPlatform, LiveSignerKind, StrategyPreset } from '@/types/bot';
 import { RPC_PROXY } from '@/services/wallet.service';
+import { AI_MODELS } from '@/lib/ai-models';
 import { BotMcpPanel } from './BotMcpPanel';
 import { BotWalletPanel } from './BotWalletPanel';
+import { BotHeaderBanner } from './BotHeaderBanner';
+import { BotTargetsPanel } from './BotTargetsPanel';
 
 /* ------------------------------------------------------------------ atoms */
 
@@ -102,6 +106,14 @@ export const BotSettingsPanel: React.FC = () => {
       ? `${settings.walletType === 'solflare' ? 'Solflare' : 'Phantom'} · ${settings.solBalance.toFixed(3)} SOL`
       : 'Connect a wallet first';
 
+  const [aiKey, setAiKey] = useState<{ configured: boolean; defaultModel?: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/ai/decide')
+      .then((r) => r.json())
+      .then((d) => setAiKey({ configured: !!d?.configured, defaultModel: d?.defaultModel }))
+      .catch(() => setAiKey({ configured: false }));
+  }, []);
+
   const SIGNERS: { id: LiveSignerKind; title: string; body: string }[] = [
     {
       id: 'wallet',
@@ -117,58 +129,13 @@ export const BotSettingsPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      {/* ------------------------------------------------ risk preset */}
-      <section className="panel p-5">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <h3 className="text-[15px] font-bold text-white flex items-center gap-2">
-              <Gauge className="w-4 h-4 text-slate-500" />
-              Risk preset
-              {settings.preset === 'custom' && <span className="chip">Custom</span>}
-            </h3>
-            <p className="text-[13px] text-slate-400 mt-1.5 max-w-2xl leading-relaxed">
-              How selective the bot is. A fresh Pump.fun mint usually holds under $150 of liquidity in its first minute,
-              so a strict preset will skip almost everything while a loose one buys tokens you cannot exit.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
-          {(Object.keys(STRATEGY_PRESETS) as Exclude<StrategyPreset, 'custom'>[]).map((id) => {
-            const preset = STRATEGY_PRESETS[id];
-            const active = settings.preset === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => applyPreset(id)}
-                aria-pressed={active}
-                className={`p-3.5 text-left rounded-xl border transition-colors duration-150 ${
-                  active ? 'bg-signal/[0.08] border-signal/40' : 'bg-ink-850 border-line hover:border-line-strong'
-                }`}
-              >
-                <span className="flex items-center justify-between gap-2">
-                  <span className={`text-[13px] font-bold ${active ? 'text-signal' : 'text-white'}`}>{preset.label}</span>
-                  {active && <Check className="w-3.5 h-3.5 text-signal" />}
-                </span>
-                <span className="block text-[11px] text-slate-500 mt-1 leading-relaxed">{preset.blurb}</span>
-                <span className="block text-[11px] text-slate-400 font-mono mt-2">
-                  Liq &ge; ${(preset.minLiquidityUsd ?? 0).toLocaleString()} · AI &ge; {preset.aiMinConfidence}% · TP +
-                  {preset.takeProfitPercent}% / SL &minus;{preset.stopLossPercent}%
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
       {/* ------------------------------------------------ execution mode */}
       <section className={`panel p-5 ${live ? 'border-neg/35' : ''}`}>
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
           <div className="min-w-0">
             <h3 className="text-[15px] font-bold text-white flex items-center gap-2">
               <Wallet className="w-4 h-4 text-slate-500" />
-              Execution mode
+              Money
               <span className={live ? 'chip chip-neg' : 'chip chip-warn'}>{live ? 'Live funds' : 'Paper'}</span>
             </h3>
             <p className="text-[13px] text-slate-400 mt-2 max-w-2xl leading-relaxed">
@@ -179,7 +146,7 @@ export const BotSettingsPanel: React.FC = () => {
             {live && !signerReady && (
               <p className="text-xs text-neg flex items-center gap-1.5 mt-2.5">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                {signerStatus}. The bot will refuse to trade live until the selected signer is ready.
+                {signerStatus}. Nothing trades live until the selected signer is ready.
               </p>
             )}
           </div>
@@ -290,95 +257,8 @@ export const BotSettingsPanel: React.FC = () => {
         </div>
       </section>
 
-      {/* ------------------------------------------------ scanner + risk */}
+      {/* ------------------------------------------------ risk + AI */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <section className="panel p-5">
-          <SectionTitle icon={<Radar className="w-4 h-4 text-slate-500" />}>Scanner filters</SectionTitle>
-
-          <div className="space-y-4">
-            <Field label="Source">
-              <select
-                className="field"
-                value={settings.launchPlatform}
-                onChange={(e) => updateSettings({ launchPlatform: e.target.value as LaunchPlatform })}
-              >
-                <option value="all">All sources — Pump.fun stream and new DEX pools</option>
-                <option value="pumpfun">Pump.fun launches only</option>
-                <option value="dexscreener">DEX pools only — Raydium, Uniswap, Aerodrome…</option>
-              </select>
-            </Field>
-
-            <Field label="Chain" hint="Live execution is Solana only. Other chains are always paper-traded.">
-              <select
-                className="field"
-                value={settings.targetChain}
-                onChange={(e) => updateSettings({ targetChain: e.target.value as ChainOption })}
-              >
-                <option value="all">All chains</option>
-                <option value="solana">Solana</option>
-                <option value="ethereum">Ethereum</option>
-                <option value="base">Base</option>
-                <option value="bsc">BNB Chain</option>
-                <option value="arbitrum">Arbitrum</option>
-              </select>
-            </Field>
-
-            <Field
-              label={`Minimum bonding curve — ${settings.minBondingCurvePercent}%`}
-              hint="0% buys at creation. Higher values wait for the curve to fill: less rug risk, worse entry."
-            >
-              <input
-                type="range"
-                min={0}
-                max={95}
-                step={5}
-                value={settings.minBondingCurvePercent}
-                onChange={(e) => updateSettings({ minBondingCurvePercent: Number(e.target.value) })}
-                className="w-full accent-signal cursor-pointer"
-                aria-label="Minimum bonding curve percent"
-              />
-            </Field>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Min liquidity (USD)">
-                <input
-                  type="number"
-                  min={0}
-                  step={100}
-                  className="field font-mono"
-                  value={settings.minLiquidityUsd}
-                  onChange={(e) => updateSettings({ minLiquidityUsd: Math.max(0, Number(e.target.value)) })}
-                />
-              </Field>
-              <Field label="Max token age (min)">
-                <input
-                  type="number"
-                  min={0}
-                  className="field font-mono"
-                  value={settings.maxTokenAgeMinutes}
-                  onChange={(e) => updateSettings({ maxTokenAgeMinutes: Math.max(0, Number(e.target.value)) })}
-                />
-              </Field>
-            </div>
-
-            <Field
-              label="Solana RPC endpoint"
-              hint={`${RPC_PROXY} routes through this app's server with public-endpoint fallback. For live trading paste a private endpoint (Helius, QuickNode, Triton): faster and not rate-limited.`}
-            >
-              <div className="relative">
-                <Server className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
-                <input
-                  type="text"
-                  className="field pl-9 font-mono text-xs"
-                  value={settings.solanaRpcUrl}
-                  placeholder={RPC_PROXY}
-                  onChange={(e) => updateSettings({ solanaRpcUrl: e.target.value.trim() || RPC_PROXY })}
-                />
-              </div>
-            </Field>
-          </div>
-        </section>
-
         <section className="panel p-5">
           <SectionTitle icon={<ShieldAlert className="w-4 h-4 text-slate-500" />}>Sizing and risk</SectionTitle>
 
@@ -439,6 +319,9 @@ export const BotSettingsPanel: React.FC = () => {
                 />
               </Field>
             </div>
+            <p className="text-[11px] text-slate-500 -mt-2 leading-relaxed">
+              Auto trade uses each signal&apos;s own stop and target (take profit capped 10-50%); these three apply to manual buys and the launch sniper.
+            </p>
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Profit lock at +%" hint="Once a position is up this much, its stop moves above cost. 0 turns it off.">
@@ -490,7 +373,7 @@ export const BotSettingsPanel: React.FC = () => {
 
             <Field
               label="Daily loss limit (USD)"
-              hint={`Pauses the auto-bot once today's realized loss reaches this. 0 turns it off. Today: ${todayPnl >= 0 ? '+' : '-'}$${Math.abs(todayPnl).toFixed(2)} (${live ? 'live' : 'paper'}).`}
+              hint={`Pauses auto trade once today's realized loss reaches this. 0 turns it off. Today: ${todayPnl >= 0 ? '+' : '-'}$${Math.abs(todayPnl).toFixed(2)} (${live ? 'live' : 'paper'}).`}
             >
               <div className="relative">
                 <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
@@ -508,7 +391,7 @@ export const BotSettingsPanel: React.FC = () => {
             <div className="pt-1">
               <SwitchRow
                 title="Automatic exits"
-                description="Close a position as soon as take-profit, stop-loss or the trailing stop is hit."
+                description="Close a position as soon as take-profit, stop-loss, profit lock or the trailing stop is hit."
                 checked={settings.autoSell}
                 onChange={(v) => updateSettings({ autoSell: v })}
               />
@@ -521,48 +404,218 @@ export const BotSettingsPanel: React.FC = () => {
             </div>
           </div>
         </section>
-      </div>
 
-      {/* ------------------------------------------------ AI gate */}
-      <section className="panel p-5">
-        <SectionTitle icon={<Brain className="w-4 h-4 text-signal" />}>AI trade gate</SectionTitle>
+        <section className="panel p-5">
+          <SectionTitle icon={<Brain className="w-4 h-4 text-signal" />}>AI (Claude)</SectionTitle>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-6 gap-y-1">
-          <SwitchRow
-            title="Review every buy"
-            description="The model scores liquidity, order flow and momentum, then returns buy or skip with a confidence figure."
-            checked={settings.aiGateEnabled}
-            onChange={(v) => updateSettings({ aiGateEnabled: v })}
-          />
-          <SwitchRow
-            title="Let the model set exits"
-            description="Use the take-profit and stop-loss it suggests per token instead of your fixed values."
-            checked={settings.aiAdjustTargets}
-            onChange={(v) => updateSettings({ aiAdjustTargets: v })}
-          />
-          <div className="py-3">
-            <label className="label">Minimum confidence — {settings.aiMinConfidence}%</label>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={settings.aiMinConfidence}
-              onChange={(e) => updateSettings({ aiMinConfidence: Number(e.target.value) })}
-              className="w-full accent-signal cursor-pointer"
-              aria-label="Minimum AI confidence"
-            />
-            <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-              Buys below this score are skipped and logged with the reason.
+          <div className="space-y-4">
+            <Field
+              label="Model"
+              hint={
+                aiKey === null
+                  ? 'Checking the server key…'
+                  : aiKey.configured
+                  ? 'Key found on the server. Prices are per million tokens, input / output; a review costs well under a cent on every model.'
+                  : 'No ANTHROPIC_API_KEY on the server: add it to .env.local (and the Vercel project) to turn the AI on.'
+              }
+            >
+              <select className="field" value={settings.aiModel} onChange={(e) => updateSettings({ aiModel: e.target.value })}>
+                {AI_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} — ${m.inputPerM} / ${m.outputPerM} · {m.blurb}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div>
+              <SwitchRow
+                title="Review every entry"
+                description="Before a buy, Claude checks the signal against the entry rules (gates, score, setup, fees) and answers buy or skip with a confidence figure."
+                checked={settings.aiGateEnabled}
+                onChange={(v) => updateSettings({ aiGateEnabled: v })}
+              />
+              <SwitchRow
+                title="Let the model tighten exits"
+                description="Use the stop and target it suggests. It may tighten a stop, never widen it."
+                checked={settings.aiAdjustTargets}
+                onChange={(v) => updateSettings({ aiAdjustTargets: v })}
+              />
+            </div>
+
+            <div>
+              <label className="label">Minimum confidence — {settings.aiMinConfidence}%</label>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={settings.aiMinConfidence}
+                onChange={(e) => updateSettings({ aiMinConfidence: Number(e.target.value) })}
+                className="w-full accent-signal cursor-pointer"
+                aria-label="Minimum AI confidence"
+              />
+              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Entries the model rates below this are skipped and logged with its reason.</p>
+            </div>
+
+            <p className="text-[11px] text-slate-500 pt-3 border-t border-line leading-relaxed">
+              The same model powers the copilot chat (bottom right) and the scorecard on the Market tab. The key never reaches the browser.
             </p>
           </div>
-        </div>
+        </section>
+      </div>
 
-        <p className="text-[11px] text-slate-500 mt-3 pt-3 border-t border-line">
-          Needs <code className="text-slate-300">ANTHROPIC_API_KEY</code> on the server, or an external model connected over
-          MCP. Without either, the gate falls back to the built-in rule-based scorer.
-        </p>
+      {/* ------------------------------------------------ RPC */}
+      <section className="panel p-5">
+        <SectionTitle icon={<Server className="w-4 h-4 text-slate-500" />}>Solana connection</SectionTitle>
+        <Field
+          label="RPC endpoint"
+          hint={`${RPC_PROXY} routes through this app's server with public-endpoint fallback. For live trading paste a private endpoint (Helius, QuickNode, Triton): faster and not rate-limited.`}
+        >
+          <div className="relative">
+            <Server className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+            <input
+              type="text"
+              className="field pl-9 font-mono text-xs"
+              value={settings.solanaRpcUrl}
+              placeholder={RPC_PROXY}
+              onChange={(e) => updateSettings({ solanaRpcUrl: e.target.value.trim() || RPC_PROXY })}
+            />
+          </div>
+        </Field>
       </section>
+
+      {/* ------------------------------------------------ launch sniper (advanced) */}
+      <details className="panel overflow-hidden">
+        <summary className="px-5 py-4 cursor-pointer select-none">
+          <span className="text-[13px] font-bold text-white flex items-center gap-2">
+            <Crosshair className="w-4 h-4 text-slate-500" />
+            Launch sniper
+            <span className="chip chip-warn">Advanced · high risk</span>
+          </span>
+          <span className="block text-xs text-slate-400 mt-1 leading-relaxed">
+            A second, separate engine that buys brand-new Pump.fun mints seconds after launch from the live stream. Most of those go to zero; it is
+            off by default and independent of auto trade.
+          </span>
+        </summary>
+        <div className="border-t border-line p-5 space-y-4">
+          <BotHeaderBanner />
+
+          <section className="panel-2 p-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="min-w-0">
+                <h4 className="text-[13px] font-bold text-white flex items-center gap-2">
+                  <Gauge className="w-4 h-4 text-slate-500" />
+                  Sniper risk preset
+                  {settings.preset === 'custom' && <span className="chip">Custom</span>}
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                  How selective the sniper is. A fresh Pump.fun mint usually holds under $150 of liquidity in its first minute, so a strict preset
+                  skips almost everything while a loose one buys tokens you cannot exit.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-3">
+              {(Object.keys(STRATEGY_PRESETS) as Exclude<StrategyPreset, 'custom'>[]).map((id) => {
+                const preset = STRATEGY_PRESETS[id];
+                const active = settings.preset === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => applyPreset(id)}
+                    aria-pressed={active}
+                    className={`p-3.5 text-left rounded-xl border transition-colors duration-150 ${
+                      active ? 'bg-signal/[0.08] border-signal/40' : 'bg-ink-850 border-line hover:border-line-strong'
+                    }`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className={`text-[13px] font-bold ${active ? 'text-signal' : 'text-white'}`}>{preset.label}</span>
+                      {active && <Check className="w-3.5 h-3.5 text-signal" />}
+                    </span>
+                    <span className="block text-[11px] text-slate-500 mt-1 leading-relaxed">{preset.blurb}</span>
+                    <span className="block text-[11px] text-slate-400 font-mono mt-2">
+                      Liq &ge; ${(preset.minLiquidityUsd ?? 0).toLocaleString()} · AI &ge; {preset.aiMinConfidence}% · TP +
+                      {preset.takeProfitPercent}% / SL &minus;{preset.stopLossPercent}%
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="panel-2 p-4">
+            <h4 className="text-[13px] font-bold text-white flex items-center gap-2 mb-3">
+              <Radar className="w-4 h-4 text-slate-500" />
+              Sniper filters
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label="Source">
+                <select
+                  className="field"
+                  value={settings.launchPlatform}
+                  onChange={(e) => updateSettings({ launchPlatform: e.target.value as LaunchPlatform })}
+                >
+                  <option value="all">All sources — Pump.fun stream and new DEX pools</option>
+                  <option value="pumpfun">Pump.fun launches only</option>
+                  <option value="dexscreener">DEX pools only — Raydium, Uniswap, Aerodrome…</option>
+                </select>
+              </Field>
+
+              <Field label="Chain" hint="Live execution is Solana only. Other chains are always paper-traded.">
+                <select className="field" value={settings.targetChain} onChange={(e) => updateSettings({ targetChain: e.target.value as ChainOption })}>
+                  <option value="all">All chains</option>
+                  <option value="solana">Solana</option>
+                  <option value="ethereum">Ethereum</option>
+                  <option value="base">Base</option>
+                  <option value="bsc">BNB Chain</option>
+                  <option value="arbitrum">Arbitrum</option>
+                </select>
+              </Field>
+
+              <Field
+                label={`Minimum bonding curve — ${settings.minBondingCurvePercent}%`}
+                hint="0% buys at creation. Higher values wait for the curve to fill: less rug risk, worse entry."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={95}
+                  step={5}
+                  value={settings.minBondingCurvePercent}
+                  onChange={(e) => updateSettings({ minBondingCurvePercent: Number(e.target.value) })}
+                  className="w-full accent-signal cursor-pointer"
+                  aria-label="Minimum bonding curve percent"
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Min liquidity (USD)">
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    className="field font-mono"
+                    value={settings.minLiquidityUsd}
+                    onChange={(e) => updateSettings({ minLiquidityUsd: Math.max(0, Number(e.target.value)) })}
+                  />
+                </Field>
+                <Field label="Max token age (min)">
+                  <input
+                    type="number"
+                    min={0}
+                    className="field font-mono"
+                    value={settings.maxTokenAgeMinutes}
+                    onChange={(e) => updateSettings({ maxTokenAgeMinutes: Math.max(0, Number(e.target.value)) })}
+                  />
+                </Field>
+              </div>
+            </div>
+          </section>
+
+          <BotTargetsPanel />
+        </div>
+      </details>
 
       {/* ------------------------------------------------ MCP */}
       <BotMcpPanel />
