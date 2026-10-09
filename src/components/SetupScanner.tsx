@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Radar, RefreshCw, ShieldCheck, Zap, ZapOff } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, Radar, RefreshCw, ShieldCheck, Users, X, Zap, ZapOff } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
-import { minEntryScore, ScanSignal, SetupKind } from '@/services/scanner.service';
+import { minEntryScore, MOMENTUM_MAX_RSI, ScanSignal, SetupKind } from '@/services/scanner.service';
+import { isSolanaAddress, MAX_SMART_WALLETS } from '@/services/smartwallet.service';
 import { CoinAvatar } from './CoinAvatar';
 import { formatNumber, formatPrice, timeAgo } from '@/lib/formatters';
 
@@ -14,6 +15,7 @@ const SETUP_LABEL: Record<SetupKind, string> = {
   flag: 'Flag',
   pullback: 'Trend pullback',
   momentum: 'Momentum',
+  rebound: 'RSI rebound',
 };
 
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
@@ -76,6 +78,12 @@ const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
                   {s.score.total}/100
                 </span>
               )}
+              {s.smartWallets ? (
+                <span className="chip" title="Tracked smart wallets that still hold this token">
+                  <Users className="w-3 h-3" />
+                  {s.smartWallets} smart
+                </span>
+              ) : null}
             </div>
             <p className="text-[11px] text-slate-500 truncate mt-0.5">
               {s.coin.name} · {ageLabel(s.ageHours)}
@@ -136,12 +144,88 @@ const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
       <p className="text-[13px] text-slate-300 mt-3">{s.reason}</p>
       <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
         Liq {formatNumber(s.liquidityUsd)} · MC {formatNumber(s.marketCapUsd)} · 1h vol {formatNumber(s.volume1hUsd)} · 1h buys/sells {s.buys1h}/{s.sells1h}
-        {s.gates ? ` · top 10 ${s.gates.top10Pct.toFixed(0)}% · insiders ${s.gates.insiderPct.toFixed(0)}%` : ''}
+        {s.rsi !== undefined ? ` · RSI 5m ${s.rsi.toFixed(0)}` : ''}
+        {s.gates ?` · top 10 ${s.gates.top10Pct.toFixed(0)}% · insiders ${s.gates.insiderPct.toFixed(0)}%` : ''}
         {s.costPercent !== undefined ? ` · fees ${s.costPercent.toFixed(1)}% round trip · net R:R 1:${(s.netRewardRisk ?? 0).toFixed(1)}` : ''}
         {s.invalidation ? ` · cancel on ${s.invalidation}` : ''}
       </p>
       {result && <p className={`text-xs mt-2 ${result.ok ? 'text-pos' : 'text-neg'}`}>{result.message}</p>}
     </article>
+  );
+};
+
+const SmartWallets: React.FC = () => {
+  const { wallets, updateSettings } = useBotStore(useShallow((s) => ({ wallets: s.settings.smartWallets || [], updateSettings: s.updateSettings })));
+  const [draft, setDraft] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+
+  const add = () => {
+    const found = draft.split(/[\s,]+/).filter(Boolean);
+    const bad = found.find((a) => !isSolanaAddress(a));
+    if (bad) {
+      setNote(`Not a Solana wallet address: ${bad}`);
+      return;
+    }
+    const merged = [...new Set([...wallets, ...found])];
+    updateSettings({ smartWallets: merged.slice(0, MAX_SMART_WALLETS) });
+    setDraft('');
+    setNote(merged.length > MAX_SMART_WALLETS ? `Tracking the first ${MAX_SMART_WALLETS}; remove one to add another.` : null);
+  };
+
+  return (
+    <details className="panel overflow-hidden">
+      <summary className="px-4 py-3 text-[13px] font-bold text-white cursor-pointer select-none">
+        Smart wallets <span className="text-slate-500 font-normal">({wallets.length})</span>
+      </summary>
+      <div className="border-t border-line px-4 py-3 space-y-3">
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Wallets of traders worth following: KOLs, or accounts with steady PnL on the GMGN, Axiom or kolscan leaderboards. Tokens they hold join the scan
+          (two of them must hold it once you track three or more), and each card shows how many still hold it. A holding is a lead, not a buy: the token still
+          has to pass every gate and show a Ready setup.
+        </p>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          <input
+            type="text"
+            className="field font-mono text-xs flex-1 min-w-0"
+            placeholder="Wallet address (paste several separated by spaces)"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button type="submit" className="btn btn-secondary shrink-0" disabled={!draft.trim() || wallets.length >= MAX_SMART_WALLETS}>
+            <Plus className="w-3.5 h-3.5" />
+            Add
+          </button>
+        </form>
+        {note && <p className="text-xs text-warn">{note}</p>}
+        {wallets.length > 0 && (
+          <ul>
+            {wallets.map((w) => (
+              <li key={w} className="row flex items-center gap-2 py-1.5 text-xs">
+                <span className="font-mono text-slate-300 truncate flex-1 min-w-0">{w}</span>
+                <a href={`https://gmgn.ai/sol/address/${w}`} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" title="PnL and recent trades on GMGN">
+                  PnL
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  title="Stop tracking this wallet"
+                  onClick={() => updateSettings({ smartWallets: wallets.filter((x) => x !== w) })}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   );
 };
 
@@ -189,7 +273,9 @@ export const SetupScanner: React.FC = () => {
             Setup scanner
           </h1>
           <p className="text-[13px] text-slate-400 mt-0.5">
-            Every minute: safety gates and clone filters, then {settings.scannerMode === 'simple' ? 'momentum breakouts as they happen, plus' : ''} breakout, flag and pullback setups. Buy only when a card says Ready.
+            Every minute: safety gates and clone filters, then{' '}
+            {settings.scannerMode === 'simple' ? `momentum breakouts as they happen (not while 5m RSI is over ${MOMENTUM_MAX_RSI}), plus ` : ''}breakout, flag, RSI
+            rebound and pullback setups. Buy only when a card says Ready.
           </p>
         </div>
         <div className="lg:ml-auto flex items-center gap-2 flex-wrap">
@@ -214,7 +300,7 @@ export const SetupScanner: React.FC = () => {
             type="button"
             onClick={() => updateSettings({ scannerMode: settings.scannerMode === 'simple' ? 'strict' : 'simple' })}
             className="btn btn-secondary"
-            title="Simple buys 5m momentum breakouts as they happen (more trades). Strict waits for a retest, flag or pullback (fewer trades)."
+            title={`Simple buys 5m momentum breakouts as they happen (more trades), skipping them while RSI is over ${MOMENTUM_MAX_RSI}. Strict waits for a retest, flag, RSI rebound or pullback (fewer trades).`}
           >
             <Gauge className="w-3.5 h-3.5" />
             {settings.scannerMode === 'simple' ? 'Mode: Simple' : 'Mode: Strict'}
@@ -250,6 +336,8 @@ export const SetupScanner: React.FC = () => {
       </div>
 
       {error && <p className="panel-2 px-4 py-3 text-[13px] text-warn">{error}</p>}
+
+      <SmartWallets />
 
       <div className="space-y-2">
         <h2 className="text-[13px] font-bold text-white">

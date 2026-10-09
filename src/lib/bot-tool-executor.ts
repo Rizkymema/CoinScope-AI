@@ -31,6 +31,7 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'dailyLossLimitUsd',
   'scannerAutoBuy',
   'scannerMode',
+  'smartWallets',
 ];
 
 function coinSummary(c: CoinData) {

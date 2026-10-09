@@ -17,6 +17,10 @@ export interface ScannerSignalBrief {
   slPercent?: number;
   tpPercent?: number;
   netRewardRisk?: number;
+  /** RSI(14) of the last closed 5m candle. */
+  rsi?: number;
+  /** Tracked smart wallets holding it. */
+  smartWallets?: number;
 }
 
 export interface ScannerSummary {

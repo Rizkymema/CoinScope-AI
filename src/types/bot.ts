@@ -79,6 +79,11 @@ export interface BotSettings {
   scannerAutoBuy: boolean;
   /** 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks. */
   scannerMode: 'strict' | 'simple';
+  /**
+   * Wallets of traders worth following (KOLs, leaderboard accounts). The scanner adds the tokens
+   * they hold to its candidates and shows how many of them hold each signal.
+   */
+  smartWallets: string[];
 }
 
 export interface BotPosition {

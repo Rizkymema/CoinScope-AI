@@ -206,6 +206,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
           mode: settings.scannerMode,
           maxStopPercent: MAX_STOP_PERCENT,
           priorityMints: get().signals.filter((s) => s.status !== 'rejected').map((s) => s.id),
+          smartWallets: settings.smartWallets,
         });
 
         const minScore = minEntryScore(useBotStore.getState().settings.scannerMode);
@@ -236,6 +237,8 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
           slPercent: s.slPercent,
           tpPercent: s.tpPercent,
           netRewardRisk: s.netRewardRisk,
+          rsi: s.rsi,
+          smartWallets: s.smartWallets,
         });
         const rejectedBy = new Map<string, number>();
         result.signals

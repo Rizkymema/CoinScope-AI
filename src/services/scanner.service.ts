@@ -2,9 +2,10 @@
  * Setup scanner: the memecoin entry rules from `skill memcoin.md`, run as code.
  *
  *   candidates  GeckoTerminal new / trending / top-volume pools + DexScreener boosts and profiles (Solana)
+ *               + tokens the user's tracked smart wallets hold
  *   filter      depth, age, activity, cloned tickers, liquidity-larger-than-market-cap pools
- *   gates       RugCheck: mint / freeze authority, Token-2022 traps, holder concentration, insiders, dev bag
- *   setups      breakout-retest, flag, trend pullback - read from 5m candles, 15m aggregated locally
+ *   gates       RugCheck: mint / freeze authority, Token-2022 traps, holder count and concentration, insiders, dev bag
+ *   setups      breakout-retest, flag, RSI rebound, trend pullback - read from 5m candles, 15m aggregated locally
  *   swap check  Jupiter buy quote + sell-back quote for ready signals (sellable, round-trip cost)
  *
  * It runs in the browser: every API here is keyless and CORS-enabled, and each viewer then spends
@@ -13,6 +14,7 @@
 import { CoinData } from '../types/coin';
 import type { Candle } from './chart.service';
 import { mapPairToCoinData } from './coin.service';
+import { SmartWalletService } from './smartwallet.service';
 
 const GECKO = 'https://api.geckoterminal.com/api/v2/networks/solana';
 const GECKO_HEADERS = { Accept: 'application/json;version=20230302' };
@@ -52,7 +54,23 @@ export const MIN_ENTRY_SCORE_SIMPLE = 60;
 export type ScanMode = 'strict' | 'simple';
 export const minEntryScore = (mode: ScanMode = 'strict') => (mode === 'simple' ? MIN_ENTRY_SCORE_SIMPLE : MIN_ENTRY_SCORE);
 
-export type SetupKind = 'breakout' | 'flag' | 'pullback' | 'momentum';
+/**
+ * "Jangan FOMO, tunggu RSI di bawah": a momentum breakout is not bought while RSI(14) on 5m is
+ * above this. Backtested on 12 safe tokens (3.5 days of 5m, TP 15 / SL 8, 3% fees): momentum alone
+ * averaged -1.5% a trade, with this cap about 0% - it halves the trades and drops mostly losers.
+ */
+export const MOMENTUM_MAX_RSI = 60;
+/** RSI rebound: RSI(14) on 5m must have sunk to this or lower before the bounce is bought. */
+export const REBOUND_RSI = 25;
+/**
+ * A token past the prefilter (1h+ old, $80K+ market cap, 100+ trades an hour) with fewer holders
+ * than this is traded by a handful of wallets - wash volume or a bundled supply.
+ */
+const MIN_HOLDERS = 150;
+/** Smart-wallet discovery adds at most this many held tokens per scan, most-held first. */
+const MAX_SMART_CANDIDATES = 40;
+
+export type SetupKind = 'breakout' | 'flag' | 'pullback' | 'momentum' | 'rebound';
 export type SignalStatus = 'ready' | 'watch' | 'rejected';
 
 export interface ScanGates {
@@ -105,6 +123,10 @@ export interface ScanSignal {
   costPercent?: number;
   /** (TP - cost) / (SL + cost). */
   netRewardRisk?: number;
+  /** RSI(14) of the last closed 5m candle. */
+  rsi?: number;
+  /** How many of the user's tracked smart wallets hold this token. */
+  smartWallets?: number;
 }
 
 export interface ScanResult {
@@ -124,6 +146,8 @@ export interface ScanOptions {
   /** Mints that were ready / watched last scan: charted first and with fresh candles. */
   priorityMints?: string[];
   mode?: ScanMode;
+  /** Wallet addresses whose holdings are scanned too and counted on each signal. */
+  smartWallets?: string[];
 }
 
 /* ------------------------------------------------------------------ plumbing */
@@ -255,6 +279,7 @@ async function safetyGates(mint: string): Promise<ScanGates | null> {
     const insiderAmount = (r.insiderNetworks || []).reduce((a: number, n: any) => a + (Number(n.tokenAmount) || 0), 0);
     const insiderPct = supply ? (100 * insiderAmount) / supply : 0;
     const devPct = supply ? (100 * (Number(r.creatorBalance) || 0)) / supply : 0;
+    const holderCount = Number(r.totalHolders) || 0;
     const ext = r.token_extensions || {};
 
     let failure: string | undefined;
@@ -267,8 +292,10 @@ async function safetyGates(mint: string): Promise<ScanGates | null> {
     else if (top10Pct > 30) failure = `Top 10 wallets hold ${top10Pct.toFixed(0)}%`;
     else if (insiderPct > 15) failure = `Insider networks hold ${insiderPct.toFixed(0)}%`;
     else if (devPct > 5) failure = `Dev still holds ${devPct.toFixed(1)}%`;
+    // 0 means RugCheck did not count them, which is not the same as having none.
+    else if (holderCount > 0 && holderCount < MIN_HOLDERS) failure = `Only ${holderCount} holders - too few real buyers for its volume`;
 
-    return { top10Pct, maxHolderPct, insiderPct, devPct, holders: Number(r.totalHolders) || 0, passed: !failure, failure };
+    return { top10Pct, maxHolderPct, insiderPct, devPct, holders: holderCount, passed: !failure, failure };
   });
 }
 
@@ -335,6 +362,26 @@ function emaLast(values: number[], period: number): number {
   return e;
 }
 
+/** Wilder RSI for every close; NaN until `period` changes have been seen. */
+export function rsiSeries(closes: number[], period = 14): number[] {
+  const out = closes.map(() => NaN);
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (i <= period) {
+      gain += Math.max(d, 0) / period;
+      loss += Math.max(-d, 0) / period;
+      if (i < period) continue;
+    } else {
+      gain = (gain * (period - 1) + Math.max(d, 0)) / period;
+      loss = (loss * (period - 1) + Math.max(-d, 0)) / period;
+    }
+    out[i] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+  }
+  return out;
+}
+
 /** Hourly blocks of the last 3 hours: higher lows = up, lower highs = down. */
 function structureOf(c15: Candle[]): 'up' | 'down' | 'range' {
   if (c15.length < 12) return 'range';
@@ -360,6 +407,8 @@ export interface ChartRead {
   structure: 'up' | 'down' | 'range';
   aboveVwap: boolean;
   high4h: number;
+  /** RSI(14) of the last closed 5m candle. */
+  rsi?: number;
 }
 
 /** Classifies a 5m candle series into a ready setup, a watch, or a rejection. */
@@ -378,7 +427,9 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
   const structure = structureOf(c15);
   const aboveVwap = price > vwap;
   const high4h = c15.length ? highOf(c15.slice(-16)) : price;
-  const base = { structure, aboveVwap, high4h };
+  const rsi = rsiSeries(c5.map((c) => c.close));
+  const rsiNow = rsi[rsi.length - 1];
+  const base = { structure, aboveVwap, high4h, rsi: Number.isFinite(rsiNow) ? rsiNow : undefined };
 
   if (c15.length < 8 || c5.length < 24) return { ...base, rejected: 'Under 2 hours of candles' };
 
@@ -386,6 +437,8 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
   //    high on >= 2x the previous hour's average volume, and was not a vertical (>15%) candle. It buys
   //    the move instead of waiting for a retest. Backtested on 24h of 12 safe tokens with TP 15 /
   //    SL 8: ~46% winners, roughly break-even after 3% round-trip fees - it trades often, not magically.
+  //    A later 3.5-day sample lost ~1.4% a trade until breakouts at an RSI over MOMENTUM_MAX_RSI
+  //    were skipped (then about -0.2%).
   if (mode === 'simple') {
     for (let i = c5.length - 1; i >= Math.max(12, c5.length - 2); i--) {
       const bar = c5[i];
@@ -394,6 +447,7 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
       if (bar.close <= prevHigh || bar.close <= bar.open || bar.close / bar.open - 1 > 0.15 || bar.volume < 2 * avgVol) continue;
       if (price > bar.close * 1.03) return { ...base, rejected: 'Momentum ran over 3% past the breakout - not chasing' };
       if (price < prevHigh) return { ...base, rejected: `Momentum breakout of ${px(prevHigh)} already failed` };
+      if (rsiNow > MOMENTUM_MAX_RSI) return { ...base, rejected: `RSI ${rsiNow.toFixed(0)} on the breakout - overbought, waiting for it to cool off instead of chasing` };
       const entryLow = bar.close * 0.99;
       const entryHigh = bar.close * 1.03;
       return {
@@ -461,7 +515,38 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
     return { ...base, levels: { setup: 'flag', status: 'watch', reason: `Flag ${px(flagLow)}-${px(flagHigh)} - buy a 5m close above ${px(flagHigh)}`, entryLow: flagHigh, entryHigh: flagHigh * 1.03, stop, invalidation } };
   }
 
-  // 3. Trend pullback: higher lows, above VWAP, buying a dip into the 15m EMA20.
+  // 3. RSI rebound: RSI(14) on 5m sank to REBOUND_RSI or lower, and the last closed candle turned
+  //    green and lifted it back over. The selling must be drying up: sells that keep coming at an
+  //    oversold RSI mean holders are leaving, and those tokens tend to keep dying.
+  const rsiDip = Math.min(...rsi.slice(-4, -1).filter(Number.isFinite));
+  if (rsiNow <= REBOUND_RSI || rsiDip <= REBOUND_RSI) {
+    const entryLow = last5.close * 0.99;
+    const entryHigh = last5.close * 1.02;
+    const mid = (entryLow + entryHigh) / 2;
+    let stop = lowOf(c5.slice(-4)) * 0.985;
+    if (stopPct(mid, stop) < 0.04) stop = mid * 0.96;
+    const invalidation = `5m close under ${px(stop)}`;
+    if (rsiNow <= REBOUND_RSI) {
+      return {
+        ...base,
+        levels: { setup: 'rebound', status: 'watch', reason: `RSI ${rsiNow.toFixed(0)} oversold - wait for a green 5m candle that lifts it over ${REBOUND_RSI} on fading sells`, entryLow, entryHigh, stop, invalidation },
+      };
+    }
+    const justCrossed = rsi[rsi.length - 2] <= REBOUND_RSI + 2;
+    if (justCrossed && last5.close > last5.open) {
+      const dumpVol = avg(c5.slice(-10, -4).map((c) => c.volume));
+      const dipVol = avg(c5.slice(-4, -1).map((c) => c.volume));
+      if (dipVol > dumpVol) return { ...base, rejected: `RSI fell to ${rsiDip.toFixed(0)} but sells are still heavy - likely to keep dying` };
+      if (stopPct(mid, stop) > maxStopPct) return { ...base, rejected: `Rebound stop would be wider than ${Math.round(maxStopPct * 100)}%` };
+      if (price > last5.close * 1.03) return { ...base, rejected: 'Rebound ran over 3% - not chasing' };
+      return {
+        ...base,
+        levels: { setup: 'rebound', status: 'ready', reason: `RSI rebound from ${rsiDip.toFixed(0)} to ${rsiNow.toFixed(0)} on a green 5m candle, sells drying up`, entryLow, entryHigh, stop, invalidation },
+      };
+    }
+  }
+
+  // 4. Trend pullback: higher lows, above VWAP, buying a dip into the 15m EMA20.
   const ema20 = emaLast(c15.map((c) => c.close), 20);
   if (structure === 'up' && aboveVwap) {
     const entryLow = ema20 * 0.99;
@@ -481,7 +566,7 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
     return { ...base, levels: { setup: 'pullback', status: 'watch', reason: `Uptrend - wait for a dip to ${px(entryLow)}-${px(entryHigh)} and a green 5m candle`, entryLow, entryHigh, stop, invalidation } };
   }
 
-  // 4. Coiling under its 4h high: watch for the breakout.
+  // 5. Coiling under its 4h high: watch for the breakout.
   const level = highOf(c15.slice(-17, -1));
   if (price >= level * 0.94 && structure !== 'down') {
     return {
@@ -503,7 +588,7 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
 
 /* ------------------------------------------------------------------ scoring + swap check */
 
-function scoreOf(pair: any, g: ScanGates, read: ChartRead): ScanScore {
+function scoreOf(pair: any, g: ScanGates, read: ChartRead, smartHolders: number): ScanScore {
   const liq = Number(pair.liquidity?.usd) || 0;
   const mcap = Number(pair.marketCap || pair.fdv) || 1;
   const buys = pair.txns?.h1?.buys || 0;
@@ -515,9 +600,10 @@ function scoreOf(pair: any, g: ScanGates, read: ChartRead): ScanScore {
   const holders = g.holders >= 20_000 ? 20 : g.holders >= 10_000 ? 17 : g.holders >= 5_000 ? 14 : g.holders >= 2_000 ? 11 : 7;
   const liquidity = (liq >= 100_000 ? 12 : liq >= 50_000 ? 10 : 7) + (liq / mcap >= 0.1 ? 8 : 5);
   const momentum = (flow >= 1.5 ? 8 : flow >= 1.2 ? 6 : flow >= 1 ? 4 : 1) + (read.structure === 'up' ? 7 : read.structure === 'range' ? 3 : 0) + (read.aboveVwap ? 5 : 0);
+  // A tracked smart wallet still holding it is social proof that cannot be bought with a boost.
   const social = Math.min(
     10,
-    (pair.info?.websites?.length ? 4 : 0) + socials.reduce((a, s) => a + (s.type === 'twitter' || s.type === 'telegram' ? 3 : 1), 0)
+    (pair.info?.websites?.length ? 4 : 0) + socials.reduce((a, s) => a + (s.type === 'twitter' || s.type === 'telegram' ? 3 : 1), 0) + 4 * smartHolders
   );
   return { safety: Math.round(safety), holders, liquidity, momentum, social, total: Math.round(safety + holders + liquidity + momentum + social) };
 }
@@ -539,9 +625,19 @@ async function swapCheck(mint: string, lamports: number): Promise<SwapCheck> {
 
 export const ScannerService = {
   async scan(opts: ScanOptions): Promise<ScanResult> {
-    const mints = await candidateMints();
+    const tracked = opts.smartWallets || [];
+    const smart = await SmartWalletService.holdings(tracked);
+    // With three or more tracked wallets a single holder is too weak a lead; require two.
+    const minHolders = tracked.length >= 3 ? 2 : 1;
+    const smartMints = [...smart.entries()]
+      .filter(([mint, holders]) => holders.length >= minHolders && !IGNORED_MINTS.has(mint))
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, MAX_SMART_CANDIDATES)
+      .map(([mint]) => mint);
+    const mints = [...new Set([...(await candidateMints()), ...smartMints])];
     const pairs = await bestPairs(mints);
     const signals: ScanSignal[] = [];
+    const smartCount = (mint: string) => smart.get(mint)?.length || 0;
 
     const signalFor = (pair: any, status: SignalStatus, reason: string): ScanSignal => ({
       id: pair.baseToken.address,
@@ -555,6 +651,7 @@ export const ScannerService = {
       volume1hUsd: Number(pair.volume?.h1) || 0,
       buys1h: pair.txns?.h1?.buys || 0,
       sells1h: pair.txns?.h1?.sells || 0,
+      smartWallets: smartCount(pair.baseToken.address) || undefined,
     });
 
     // Clones: when several candidates share a ticker, only the oldest one counts.
@@ -622,9 +719,9 @@ export const ScannerService = {
         return;
       }
       const read = readChart(candles, maxStop, opts.mode);
-      const score = scoreOf(pair, gates, read);
+      const score = scoreOf(pair, gates, read, smartCount(mint));
       if (!read.levels) {
-        signals.push({ ...signalFor(pair, 'rejected', read.rejected || 'No setup'), gates, score });
+        signals.push({ ...signalFor(pair, 'rejected', read.rejected || 'No setup'), gates, score, rsi: read.rsi });
         return;
       }
 
@@ -667,6 +764,7 @@ export const ScannerService = {
         slPercent,
         tpPercent,
         invalidation: levels.invalidation,
+        rsi: read.rsi,
       };
 
       if (status === 'ready') {

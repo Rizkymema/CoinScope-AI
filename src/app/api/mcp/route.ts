@@ -151,11 +151,16 @@ const handler = createMcpHandler(
           scannerMode: z
             .enum(['strict', 'simple'])
             .optional()
-            .describe("Scanner entries: 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks"),
+            .describe("Scanner entries: 'simple' also buys 5m momentum breakouts as they happen (skipped while 5m RSI is over 60); 'strict' waits for retests, flags, RSI rebounds and pullbacks"),
           scannerAutoBuy: z
             .boolean()
             .optional()
             .describe('Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.'),
+          smartWallets: z
+            .array(z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/))
+            .max(15)
+            .optional()
+            .describe('Solana wallets of traders to follow (KOLs, leaderboard accounts); replaces the list. The scanner adds tokens they hold to its candidates and counts them on each signal.'),
           minLiquidityUsd: z.number().min(0).optional(),
           maxTokenAgeMinutes: z.number().min(0).optional(),
           maxPositions: z.number().int().min(1).max(50).optional(),
