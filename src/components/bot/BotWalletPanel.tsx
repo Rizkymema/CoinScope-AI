@@ -67,6 +67,19 @@ export const BotWalletPanel: React.FC = () => {
 
   const address = botWallet.address;
   const phantomAddress = settings.phantomWalletConnected ? settings.connectedWalletAddress : null;
+  const backedUp = botWallet.backedUp;
+
+  const downloadBackup = (secret: string) => {
+    const blob = new Blob([HotWallet.backupFileText(secret)], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `coinscope-bot-wallet-${(address || 'key').slice(0, 6)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const reset = (next: Mode = 'idle') => {
     setMode(next);
@@ -184,6 +197,16 @@ export const BotWalletPanel: React.FC = () => {
         </div>
       </div>
 
+      {address && !backedUp && (
+        <p className="mt-3 panel-2 border-warn/40 px-3 py-2.5 text-xs text-warn flex items-start gap-2 leading-relaxed">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+          <span>
+            <strong>Not backed up.</strong> A browser crash, a Chrome reset or clearing site data deletes this wallet and everything in it.
+            Click <strong>Export key</strong> and save the backup file before funding - funding stays disabled until then.
+          </span>
+        </p>
+      )}
+
       {/* ---------------------------------------------- existing wallet */}
       {address && (
         <div className="mt-3.5 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-start">
@@ -234,8 +257,8 @@ export const BotWalletPanel: React.FC = () => {
             type="button"
             className="btn btn-sm btn-secondary"
             onClick={() => reset('fund')}
-            disabled={!phantomAddress}
-            title={phantomAddress ? 'Send SOL from your connected wallet' : 'Connect Phantom or Solflare to fund from it'}
+            disabled={!phantomAddress || !backedUp}
+            title={!backedUp ? 'Export and save the key first' : phantomAddress ? 'Send SOL from your connected wallet' : 'Connect Phantom or Solflare to fund from it'}
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
             Fund from wallet
@@ -401,6 +424,10 @@ export const BotWalletPanel: React.FC = () => {
                 </button>
                 <CopyButton value={exported} label="Copy private key" compact />
               </div>
+              <button type="button" className="btn btn-sm btn-primary" onClick={() => downloadBackup(exported)}>
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+                Download backup file
+              </button>
               <p className="text-[11px] text-slate-500">Phantom: Add account &rarr; Import private key accepts this string.</p>
               <button type="button" className="btn btn-ghost" onClick={() => reset()}>
                 Done

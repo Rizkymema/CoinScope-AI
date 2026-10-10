@@ -60,7 +60,7 @@ interface BotState {
   skipReasons: { reason: string; at: number }[];
   evaluatedCount: number;
   /** In-browser bot wallet (address is public; `unlocked` means it can sign right now). */
-  botWallet: { address: string | null; unlocked: boolean; solBalance: number | null };
+  botWallet: { address: string | null; unlocked: boolean; solBalance: number | null; backedUp: boolean };
   walletDialogOpen: boolean;
 
   // lifecycle
@@ -283,7 +283,7 @@ export const useBotStore = create<BotState>()(
       isDryRunning: false,
       skipReasons: [],
       evaluatedCount: 0,
-      botWallet: { address: null, unlocked: false, solBalance: null },
+      botWallet: { address: null, unlocked: false, solBalance: null, backedUp: false },
       walletDialogOpen: false,
 
       log: (type, message, extra) => {
@@ -883,7 +883,8 @@ export const useBotStore = create<BotState>()(
       syncBotWallet: async () => {
         const address = HotWallet.address();
         const unlocked = HotWallet.isUnlocked();
-        set((s) => ({ botWallet: { address, unlocked, solBalance: address === s.botWallet.address ? s.botWallet.solBalance : null } }));
+        const backedUp = HotWallet.isBackedUp();
+        set((s) => ({ botWallet: { address, unlocked, backedUp, solBalance: address === s.botWallet.address ? s.botWallet.solBalance : null } }));
         if (!address) return;
         const bal = await WalletService.getSolBalance(address, get().settings.solanaRpcUrl);
         if (bal !== null && get().botWallet.address === address) set((s) => ({ botWallet: { ...s.botWallet, solBalance: bal } }));

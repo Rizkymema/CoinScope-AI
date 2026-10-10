@@ -24,6 +24,8 @@ interface Vault {
   data: string;
   iterations: number;
   createdAt: number;
+  /** Set once the owner has exported the key (or imported one they already hold). */
+  backedUpAt?: number;
 }
 
 export interface SendResult {
@@ -143,6 +145,18 @@ export const HotWallet = {
     return !!keypair;
   },
 
+  /** True once the key has been exported or imported, i.e. a copy exists outside this browser. */
+  isBackedUp(): boolean {
+    return !!readVault()?.backedUpAt;
+  },
+
+  markBackedUp() {
+    const vault = readVault();
+    if (!vault || vault.backedUpAt) return;
+    writeVault({ ...vault, backedUpAt: Date.now() });
+    emit();
+  },
+
   unlockedAddress(): string | null {
     return keypair ? keypair.publicKey.toBase58() : null;
   },
@@ -166,7 +180,8 @@ export const HotWallet = {
     assertPassword(password);
     if (readVault()) throw new Error('A bot wallet already exists. Remove it before importing another.');
     const kp = parseSecret(secret);
-    writeVault(await seal(kp, password));
+    // An imported key already exists outside this browser, so it counts as backed up.
+    writeVault({ ...(await seal(kp, password)), backedUpAt: Date.now() });
     keypair = kp;
     emit();
     return kp.publicKey.toBase58();
@@ -190,7 +205,23 @@ export const HotWallet = {
     const vault = readVault();
     if (!vault) throw new Error('No bot wallet stored in this browser.');
     const kp = await openVault(vault, password);
+    this.markBackedUp();
     return base58Encode(kp.secretKey);
+  },
+
+  /** Text for a backup file the owner can keep outside the browser. */
+  backupFileText(secret: string): string {
+    const address = readVault()?.address || '';
+    return [
+      'CoinScope bot wallet backup',
+      `Address: ${address}`,
+      `Private key (base58): ${secret}`,
+      `Exported: ${new Date().toISOString()}`,
+      '',
+      'Anyone with this key controls the wallet. Keep this file offline; never paste it into a website or chat.',
+      'Restore: CoinScope > Settings > Bot wallet > Import private key, or Phantom > Add account > Import private key.',
+    ].join('
+');
   },
 
   /** Deletes the encrypted key from this browser. Funds stay on-chain; without a backup they are unreachable. */

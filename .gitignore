@@ -48,3 +48,7 @@ tsconfig.tsbuildinfo
 
 .vercel
 .env*
+
+# never commit wallet keys pasted next to the code
+key.md
+*.key
