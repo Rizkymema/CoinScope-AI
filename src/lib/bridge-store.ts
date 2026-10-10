@@ -148,7 +148,7 @@ export const BridgeStore = {
         ok: false,
         result: JSON.stringify({
           error:
-            'CoinScope dashboard is not connected. Open the web app in a browser (Auto Bot tab), make sure the access key matches, and keep the tab open - the bot engine runs in the browser.',
+            'CoinScope dashboard is not connected. Open the web app in Chrome, enter the access key under Settings > MCP integration, and keep the tab in the foreground - the bot engine runs in the browser.',
         }),
         finishedAt: Date.now(),
       };

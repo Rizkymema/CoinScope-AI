@@ -61,9 +61,10 @@ export default function DashboardPage() {
   const readyCount = useScannerStore((s) => s.readyIds.length);
   const autoTradeOn = settings.scannerAutoBuy;
 
-  // Entries and exits run in this tab: keep it awake (screen, and an inaudible tone so the browser
-  // does not throttle or freeze it when hidden) and warn before closing it.
-  useKeepAlive(isSniperActive || hasLivePositions || autoTradeOn);
+  // Entries, exits and MCP commands run in this tab: keep it awake (screen, and an inaudible tone so
+  // the browser does not throttle or freeze it when hidden) and warn before closing it. Live mode
+  // counts even while idle, otherwise a backgrounded tab answers MCP too late.
+  useKeepAlive(isSniperActive || hasLivePositions || autoTradeOn || !settings.paperTrading);
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
   useEffect(() => {
