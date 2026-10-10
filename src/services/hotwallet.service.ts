@@ -220,8 +220,7 @@ export const HotWallet = {
       '',
       'Anyone with this key controls the wallet. Keep this file offline; never paste it into a website or chat.',
       'Restore: CoinScope > Settings > Bot wallet > Import private key, or Phantom > Add account > Import private key.',
-    ].join('
-');
+    ].join('\n');
   },
 
   /** Deletes the encrypted key from this browser. Funds stay on-chain; without a backup they are unreachable. */
