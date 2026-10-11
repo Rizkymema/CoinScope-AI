@@ -79,7 +79,7 @@ interface BotState {
     coin: CoinData,
     amountUsd?: number,
     reason?: string,
-    targets?: { tp: number; sl: number }
+    targets?: { tp: number; sl: number; timeStopMinutes?: number }
   ) => Promise<{ success: boolean; message: string }>;
   closePosition: (positionId: string, exitReason: ExitReason, percent?: number) => Promise<{ success: boolean; message: string }>;
   setPositionTargets: (positionId: string, tpPercent?: number, slPercent?: number) => boolean;
@@ -209,6 +209,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   scannerAutoBuy: false,
   scannerMode: 'strict',
   smartWallets: [],
+  scanLaunches: true,
 };
 
 /** Liquid Solana token used by the live-pipeline test when the scanner has nothing yet. */
@@ -588,7 +589,12 @@ export const useBotStore = create<BotState>()(
 
         set((s) => ({ pendingTradeIds: [...s.pendingTradeIds, coin.id] }));
         try {
-          return await openPosition(coin, amount, { tp: targets?.tp ?? settings.takeProfitPercent, sl: targets?.sl ?? settings.stopLossPercent, reason });
+          return await openPosition(coin, amount, {
+            tp: targets?.tp ?? settings.takeProfitPercent,
+            sl: targets?.sl ?? settings.stopLossPercent,
+            timeStopMinutes: targets?.timeStopMinutes,
+            reason,
+          });
         } finally {
           set((s) => ({ pendingTradeIds: s.pendingTradeIds.filter((id) => id !== coin.id) }));
         }
@@ -684,7 +690,19 @@ export const useBotStore = create<BotState>()(
 
           const sign = pnlUsd >= 0 ? '+' : '';
           const label =
-            exitReason === 'TP_HIT' ? 'TAKE PROFIT' : exitReason === 'SL_HIT' ? 'STOP LOSS' : exitReason === 'TRAILING_STOP' ? 'TRAILING STOP' : exitReason === 'PROFIT_LOCK' ? 'PROFIT LOCK' : exitReason === 'AI_SELL' ? 'AI SELL' : 'MANUAL SELL';
+            exitReason === 'TP_HIT'
+              ? 'TAKE PROFIT'
+              : exitReason === 'SL_HIT'
+              ? 'STOP LOSS'
+              : exitReason === 'TRAILING_STOP'
+              ? 'TRAILING STOP'
+              : exitReason === 'PROFIT_LOCK'
+              ? 'PROFIT LOCK'
+              : exitReason === 'TIME_STOP'
+              ? 'TIME STOP'
+              : exitReason === 'AI_SELL'
+              ? 'AI SELL'
+              : 'MANUAL SELL';
 
           set((s) => ({
             walletBalance: pos.isLive ? s.walletBalance : s.walletBalance + proceedsUsd,
@@ -761,6 +779,8 @@ export const useBotStore = create<BotState>()(
       pollPositionPrices: async () => {
         const { positions } = get();
         if (positions.length === 0) return;
+        // A token nobody trades sends no ticks, so time stops are also checked on this timer.
+        positions.filter((p) => p.timeStopMinutes).forEach((p) => markToMarket(p.id, p.currentPriceUsd, p.priceSource));
         // Bonding-curve tokens are priced by the stream; everything else via DexScreener.
         const targets = positions
           .filter((p) => !(p.priceSource === 'pumpportal' && p.lastPriceUpdateAt && Date.now() - p.lastPriceUpdateAt < 20_000))
@@ -1023,6 +1043,7 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
   const pnlUsd = currentVal - pos.amountUsd;
   const pnlPercent = pos.amountUsd > 0 ? (pnlUsd / pos.amountUsd) * 100 : 0;
   const highPriceUsd = Math.max(pos.highPriceUsd, price);
+  const highAt = price > pos.highPriceUsd ? Date.now() : pos.highAt ?? pos.boughtAt;
   const { settings } = store;
 
   // Profit lock: once the position has been up the trigger %, raise its stop above cost (amountUsd
@@ -1041,7 +1062,7 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
 
   useBotStore.setState((s) => ({
     positions: s.positions.map((p) =>
-      p.id === positionId ? { ...p, currentPriceUsd: price, pnlUsd, pnlPercent, highPriceUsd, slPriceUsd, profitLocked, lastPriceUpdateAt: Date.now(), priceSource: source } : p
+      p.id === positionId ? { ...p, currentPriceUsd: price, pnlUsd, pnlPercent, highPriceUsd, highAt, slPriceUsd, profitLocked, lastPriceUpdateAt: Date.now(), priceSource: source } : p
     ),
   }));
 
@@ -1053,6 +1074,8 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
     const trail = highPriceUsd * (1 - settings.trailingStopPercent / 100);
     if (price <= trail && trail > pos.buyPriceUsd) exit = 'TRAILING_STOP';
   }
+  // Launch momentum is spent once the token stops printing new highs (skill: 15-20 min).
+  if (!exit && pos.timeStopMinutes && Date.now() - highAt > pos.timeStopMinutes * 60_000) exit = 'TIME_STOP';
   if (!exit) return;
   // A failed exit (rejected prompt, locked wallet, RPC hiccup) retries after a pause instead of on every tick.
   if ((exitRetryAt.get(positionId) || 0) > Date.now()) return;
@@ -1141,7 +1164,7 @@ function pauseForDailyLoss() {
 async function openPosition(
   coin: CoinData,
   amountUsd: number,
-  opts: { tp: number; sl: number; decision?: AiDecision; reason: string }
+  opts: { tp: number; sl: number; timeStopMinutes?: number; decision?: AiDecision; reason: string }
 ): Promise<{ success: boolean; message: string }> {
   const store = useBotStore.getState();
   const { settings } = store;
@@ -1151,7 +1174,14 @@ async function openPosition(
   if (!priceUsd) return { success: false, message: `${coin.symbol}: no price available.` };
 
   let position = BotService.createPosition({ ...coin, priceUsd }, { ...settings, buyAmountUsd: amountUsd, takeProfitPercent: opts.tp, stopLossPercent: opts.sl });
-  position = { ...position, isLive: live, mint: isSolana(coin) ? mintOf(coin) : undefined, aiDecision: opts.decision, priceSource: (coin.source as BotPosition['priceSource']) || undefined };
+  position = {
+    ...position,
+    isLive: live,
+    mint: isSolana(coin) ? mintOf(coin) : undefined,
+    aiDecision: opts.decision,
+    priceSource: (coin.source as BotPosition['priceSource']) || undefined,
+    timeStopMinutes: opts.timeStopMinutes,
+  };
 
   if (!live) {
     // Paper entries pay the price impact and fees a real buy of this size would.

@@ -12,8 +12,13 @@ export const maxDuration = 60;
  * The model runs server-side; tool calls are executed CLIENT-side (the bot state lives in the
  * browser store), so this route returns the raw assistant content and the client loops:
  *   POST -> tool_use blocks -> client executes -> POST again with tool_result blocks -> ... -> end_turn
+ *
+ * The client sends Claude's thinking blocks back with the history, and each block is only valid
+ * while the system prompt, the tools and every earlier message are byte-identical to when it was
+ * written. So the system prompt here never changes, and the live bot snapshot travels inside each
+ * user message instead (AIJudgeChat).
  */
-const BOT_TOOLS: Anthropic.Tool[] = [
+const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: 'get_bot_status',
     description: 'Current bot status: running or paused, settings, wallet, execution mode, open positions summary and performance stats.',
@@ -78,6 +83,10 @@ const BOT_TOOLS: Anthropic.Tool[] = [
         scannerAutoBuy: {
           type: 'boolean',
           description: 'Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.',
+        },
+        scanLaunches: {
+          type: 'boolean',
+          description: 'Launch watcher: follow each new Pump.fun token for 30 min; auto trade may buy ones with fast buying, clean RugCheck holder checks and an RSI dip (stop <= 12%, 15-min time stop).',
         },
         aiModel: {
           type: 'string',
@@ -189,13 +198,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let messages: Anthropic.MessageParam[];
-  let snapshot: unknown;
+  let messages: Anthropic.Beta.BetaMessageParam[];
   let model: string;
   try {
     const body = await req.json();
     messages = Array.isArray(body?.messages) ? body.messages : [];
-    snapshot = body?.snapshot;
     model = modelFor(body?.model);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
@@ -204,16 +211,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = getAnthropic();
-    const response = await client.messages.create({
+    const response = await client.beta.messages.create({
       model,
       max_tokens: 4096,
-      system: [
-        { type: 'text', text: CONTROL_PROMPT, cache_control: { type: 'ephemeral' } },
-        {
-          type: 'text',
-          text: `Bot snapshot at ${new Date().toISOString()} (use get_bot_status for the live version):\n${JSON.stringify(snapshot ?? {}, null, 1)}`,
-        },
-      ],
+      betas: ['thinking-binding-controls-2026-08-01'],
+      // A history that still breaks the binding (a tab from before this fix, a model switch) loses
+      // the affected thinking blocks instead of failing the whole turn with a 400.
+      thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
+      system: [{ type: 'text', text: CONTROL_PROMPT, cache_control: { type: 'ephemeral' } }],
       tools: BOT_TOOLS,
       output_config: { effort: 'high' },
       messages,

@@ -60,6 +60,10 @@ export interface CoinData {
   metadataUri?: string;
   /** Pool / launchpad type reported by the stream (pump, pump-amm, raydium, bonk, ...). */
   poolType?: string;
+  /** Wallet that created the token (Pump.fun stream). */
+  creator?: string;
+  /** Tokens the creator bought in the create transaction. */
+  devInitialTokens?: number;
   description?: string;
   /** True when the token has migrated off the bonding curve. */
   graduated?: boolean;

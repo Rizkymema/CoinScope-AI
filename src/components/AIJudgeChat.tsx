@@ -57,27 +57,39 @@ export const AIJudgeChat: React.FC = () => {
     const contextNote = selected
       ? `\n\n[Context: user currently has ${selected.symbol} (${selected.id}) selected in the dashboard]`
       : '';
-    historyRef.current.push({ role: 'user', content: userText + contextNote });
+    const turnStart = historyRef.current.length;
+    // The live state rides in the user turn and is never rewritten afterwards: the history goes
+    // back to Claude with its thinking blocks, which stay valid only while what precedes them is
+    // unchanged. That is also why the server keeps its system prompt fixed.
+    historyRef.current.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: userText + contextNote },
+        {
+          type: 'text',
+          text: `[Bot snapshot at ${new Date().toISOString()} - call get_bot_status for the live version]\n${JSON.stringify(useBotStore.getState().getSnapshot())}`,
+        },
+      ],
+    });
 
     const assistantId = `a-${Date.now()}`;
     pushMessage({ id: assistantId, role: 'assistant', content: '', isStreaming: true });
-    await continueLoop(assistantId, 0, userText);
+    await continueLoop(assistantId, 0, userText, turnStart);
   };
 
   /** Continues the tool loop after the first round, writing into `bubbleId`. */
-  const continueLoop = async (bubbleId: string, startRound: number, userText: string): Promise<string> => {
+  const continueLoop = async (bubbleId: string, startRound: number, userText: string, turnStart: number): Promise<string> => {
     let rounds = startRound;
     let currentBubble = bubbleId;
     while (rounds < MAX_TOOL_ROUNDS) {
       rounds += 1;
-      const snapshot = useBotStore.getState().getSnapshot();
-      const turn = await AIService.chatTurn(historyRef.current, snapshot, useBotStore.getState().settings.aiModel);
+      const turn = await AIService.chatTurn(historyRef.current, useBotStore.getState().settings.aiModel);
       if (turn.error) {
         const noKey = /ANTHROPIC_API_KEY/i.test(turn.error);
         if (noKey) setAiUnavailable(turn.error);
-        // Drop the un-answered user turn so the history stays valid for the next attempt.
-        const last = historyRef.current[historyRef.current.length - 1];
-        if (last?.role === 'user') historyRef.current.pop();
+        // Roll the whole failed turn back, tool rounds included, so the next attempt never sends a
+        // tool_use without its result.
+        historyRef.current.length = turnStart;
         const text = noKey ? AIService.localReply(userText, useCoinStore.getState().selectedCoin, aiAnalysis) : turn.error;
         patchMessage(currentBubble, { content: text, isStreaming: false, isError: !noKey });
         return text;

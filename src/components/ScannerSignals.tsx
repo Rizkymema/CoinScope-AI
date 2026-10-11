@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, RefreshCw, ShieldCheck, Users, X } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, RefreshCw, Rocket, ShieldCheck, Users, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
 import { minEntryScore, MOMENTUM_MAX_RSI, ScanSignal, SetupKind } from '@/services/scanner.service';
+import { LAUNCH_TIME_STOP_MINUTES, MIN_LAUNCH_SCORE } from '@/services/launch.service';
 import { isSolanaAddress, MAX_SMART_WALLETS } from '@/services/smartwallet.service';
 import { CoinAvatar } from './CoinAvatar';
 import { formatNumber, formatPrice, timeAgo } from '@/lib/formatters';
@@ -16,6 +17,7 @@ const SETUP_LABEL: Record<SetupKind, string> = {
   pullback: 'Trend pullback',
   momentum: 'Momentum',
   rebound: 'RSI rebound',
+  launch: 'New launch',
 };
 
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
@@ -40,12 +42,14 @@ export const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
   const [copied, setCopied] = useState(false);
   const ready = s.status === 'ready';
   const busy = pendingTradeIds.includes(s.coin.id);
+  const launch = s.setup === 'launch';
 
   const buy = async () => {
     setResult(null);
     const r = await manualSnipeCoin(s.coin, settings.buyAmountUsd, `scanner ${s.setup} ${s.score?.total ?? ''}`.trim(), {
       tp: round1(s.tpPercent),
       sl: round1(s.slPercent),
+      timeStopMinutes: launch ? LAUNCH_TIME_STOP_MINUTES : undefined,
     });
     setResult({ ok: r.success, message: r.message });
   };
@@ -72,7 +76,7 @@ export const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
               {s.setup && <span className="chip chip-info">{SETUP_LABEL[s.setup]}</span>}
               {s.score && (
                 <span
-                  className={scoreChip(s.score.total, minEntryScore(settings.scannerMode))}
+                  className={scoreChip(s.score.total, launch ? MIN_LAUNCH_SCORE : minEntryScore(settings.scannerMode))}
                   title={`Safety ${s.score.safety}/30 · Holders ${s.score.holders}/20 · Liquidity ${s.score.liquidity}/20 · Momentum ${s.score.momentum}/20 · Social ${s.score.social}/10`}
                 >
                   {s.score.total}/100
@@ -143,8 +147,10 @@ export const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
 
       <p className="text-[13px] text-slate-300 mt-3">{s.reason}</p>
       <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-        Liq {formatNumber(s.liquidityUsd)} · MC {formatNumber(s.marketCapUsd)} · 1h vol {formatNumber(s.volume1hUsd)} · 1h buys/sells {s.buys1h}/{s.sells1h}
-        {s.rsi !== undefined ? ` · RSI 5m ${s.rsi.toFixed(0)}` : ''}
+        {s.launch
+          ? `${s.launch.holders} holders (+${s.launch.newHoldersPerMin}/min) · ${s.launch.buys} buys since launch · curve ${s.launch.curvePercent.toFixed(0)}% · MC ${formatNumber(s.marketCapUsd)} · buys/sells 5m ${s.buys5m}/${s.sells5m} · dev ${s.launch.devPct.toFixed(1)}% · ${s.launch.drawdownPct.toFixed(0)}% under the high`
+          : `Liq ${formatNumber(s.liquidityUsd)} · MC ${formatNumber(s.marketCapUsd)} · 1h vol ${formatNumber(s.volume1hUsd)} · buys/sells 5m ${s.buys5m}/${s.sells5m}, 1h ${s.buys1h}/${s.sells1h}`}
+        {s.rsi !== undefined ? ` · RSI ${launch ? '10s' : '5m'} ${s.rsi.toFixed(0)}` : ''}
         {s.gates ? ` · top 10 ${s.gates.top10Pct.toFixed(0)}% · insiders ${s.gates.insiderPct.toFixed(0)}%` : ''}
         {s.costPercent !== undefined ? ` · fees ${s.costPercent.toFixed(1)}% round trip · net R:R 1:${(s.netRewardRisk ?? 0).toFixed(1)}` : ''}
         {s.invalidation ? ` · cancel on ${s.invalidation}` : ''}
@@ -229,6 +235,37 @@ export const SmartWallets: React.FC = () => {
   );
 };
 
+/** New launches the launch watcher is streaming: confirmed dips first, then the ones worth watching. */
+const LaunchSignals: React.FC = () => {
+  const { launches, launchWatched, enabled } = useScannerStore(useShallow((s) => ({ launches: s.launches, launchWatched: s.launchWatched, enabled: s.enabled })));
+  const { scanLaunches, updateSettings } = useBotStore(useShallow((s) => ({ scanLaunches: s.settings.scanLaunches, updateSettings: s.updateSettings })));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <h3 className="text-[13px] font-bold text-white flex items-center gap-1.5">
+          <Rocket className="w-3.5 h-3.5 text-slate-500" />
+          New launches <span className="text-slate-500 font-normal">({scanLaunches && enabled ? `${launchWatched} streaming` : 'off'})</span>
+        </h3>
+        <button type="button" className="btn btn-sm btn-ghost ml-auto" onClick={() => updateSettings({ scanLaunches: !scanLaunches })}>
+          {scanLaunches ? 'Turn off' : 'Turn on'}
+        </button>
+      </div>
+      {!scanLaunches ? (
+        <p className="panel px-4 py-4 text-[13px] text-slate-400">
+          Off. When on, every new Pump.fun token is watched for its first 30 minutes and only bought after buyers pile in, the holder checks pass and RSI dips.
+        </p>
+      ) : launches.length === 0 ? (
+        <p className="panel px-4 py-4 text-[13px] text-slate-400">
+          No launch has passed the holder checks yet. Most new tokens never reach 80 holders; the ones that do show up here with their dip trigger.
+        </p>
+      ) : (
+        launches.map((s) => <SignalCard key={`launch-${s.id}`} signal={s} />)
+      )}
+    </div>
+  );
+};
+
 /** The scanner's signal lists with their small toolbar. Starting and stopping auto trade lives on the page above. */
 export const ScannerSignals: React.FC = () => {
   const { enabled, alerts, scanning, signals, candidateCount, lastScanAt, error, setEnabled, setAlerts, scanNow } = useScannerStore(
@@ -259,7 +296,8 @@ export const ScannerSignals: React.FC = () => {
           <p className="text-[13px] text-slate-400 mt-0.5">
             Every minute: safety gates and clone filters, then{' '}
             {settings.scannerMode === 'simple' ? `momentum breakouts as they happen (not while 5m RSI is over ${MOMENTUM_MAX_RSI}), plus ` : ''}breakout, flag, RSI
-            rebound and pullback setups. <span className="text-pos font-semibold">Ready</span> = a confirmed entry; <span className="text-white">Watching</span> = wait for the trigger on the card.
+            rebound and pullback setups; new launches are watched second by second. <span className="text-pos font-semibold">Ready</span> = a confirmed entry;{' '}
+            <span className="text-white">Watching</span> = wait for the trigger on the card.
           </p>
         </div>
         <div className="lg:ml-auto flex items-center gap-2 flex-wrap">
@@ -312,6 +350,8 @@ export const ScannerSignals: React.FC = () => {
           ready.map((s) => <SignalCard key={s.id} signal={s} />)
         )}
       </div>
+
+      <LaunchSignals />
 
       {watching.length > 0 && (
         <div className="space-y-2">

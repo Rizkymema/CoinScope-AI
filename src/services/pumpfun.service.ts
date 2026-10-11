@@ -194,6 +194,8 @@ export const PumpFunService = {
       source: 'pumpportal',
       poolType: pool,
       txns24h: { buys: evt.initialBuy ? 1 : 0, sells: 0 },
+      creator: evt.traderPublicKey,
+      devInitialTokens: Number(evt.initialBuy) || 0,
     };
   },
 

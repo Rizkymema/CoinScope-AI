@@ -161,6 +161,10 @@ const handler = createMcpHandler(
             .max(15)
             .optional()
             .describe('Solana wallets of traders to follow (KOLs, leaderboard accounts); replaces the list. The scanner adds tokens they hold to its candidates and counts them on each signal.'),
+          scanLaunches: z
+            .boolean()
+            .optional()
+            .describe('Launch watcher: follow every new Pump.fun token for 30 min and let auto trade buy ones with fast buying, clean RugCheck holder checks and an RSI dip (stop <= 12%, 15-min time stop).'),
           minLiquidityUsd: z.number().min(0).optional(),
           maxTokenAgeMinutes: z.number().min(0).optional(),
           maxPositions: z.number().int().min(1).max(50).optional(),

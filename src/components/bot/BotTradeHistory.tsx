@@ -13,6 +13,7 @@ const EXIT_LABEL: Record<string, string> = {
   SL_HIT: 'Stop loss',
   TRAILING_STOP: 'Trailing stop',
   PROFIT_LOCK: 'Profit lock',
+  TIME_STOP: 'Time stop',
   MANUAL_SELL: 'Manual',
   AI_SELL: 'AI',
 };

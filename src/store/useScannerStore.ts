@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { minEntryScore, ScannerService, ScanSignal } from '../services/scanner.service';
+import { LAUNCH_TIME_STOP_MINUTES, LaunchWatcher } from '../services/launch.service';
 import { AudioService } from '../services/audio.service';
 import { SolPriceService } from '../services/solprice.service';
 import { AIService, SignalForGate } from '../services/ai.service';
@@ -31,6 +32,10 @@ interface ScannerState {
   readyIds: string[];
   /** When auto trade was switched on in this tab (uptime display); null while off. */
   autoSince: number | null;
+  /** New launches the launch watcher rates ready or worth watching, best first. */
+  launches: ScanSignal[];
+  /** How many new launches are being streamed right now. */
+  launchWatched: number;
 
   init: () => void;
   setEnabled: (on: boolean) => void;
@@ -109,6 +114,8 @@ function toGateSignal(s: ScanSignal): SignalForGate {
     volume1hUsd: Math.round(s.volume1hUsd),
     buys1h: s.buys1h,
     sells1h: s.sells1h,
+    buys5m: s.buys5m,
+    sells5m: s.sells5m,
     rsi: s.rsi !== undefined ? Math.round(s.rsi) : undefined,
     entryLow: s.entryLow,
     entryHigh: s.entryHigh,
@@ -120,6 +127,15 @@ function toGateSignal(s: ScanSignal): SignalForGate {
     costPercent: s.costPercent !== undefined ? round1(s.costPercent) : undefined,
     netRewardRisk: s.netRewardRisk !== undefined ? round1(s.netRewardRisk) : undefined,
     smartWallets: s.smartWallets,
+    launch: s.launch
+      ? {
+          ...s.launch,
+          ageMinutes: round1(s.launch.ageMinutes),
+          curvePercent: Math.round(s.launch.curvePercent),
+          devPct: round1(s.launch.devPct),
+          drawdownPct: Math.round(s.launch.drawdownPct),
+        }
+      : undefined,
     gates: s.gates ? { top10Pct: round1(s.gates.top10Pct), maxHolderPct: round1(s.gates.maxHolderPct), insiderPct: round1(s.gates.insiderPct), devPct: round1(s.gates.devPct), holders: s.gates.holders } : undefined,
     score: s.score,
     sellBack: s.swap ? (s.swap.sellable ? { sellable: true, roundTripPct: round1(s.swap.roundTripPct) } : { sellable: false }) : undefined,
@@ -219,12 +235,35 @@ async function autoBuy(ready: ScanSignal[]) {
   }
 
   autoBuyAt.set(candidate.id, Date.now());
-  const r = await bot.manualSnipeCoin(candidate.coin, amountUsd, reason, { tp, sl });
+  let coin = candidate.coin;
+  if (candidate.setup === 'launch') {
+    // Claude's review takes seconds and a launch can move that fast: re-check before paying.
+    const now = await LaunchWatcher.recheck(candidate.id, candidate.entryHigh ?? Infinity);
+    if (!now.ok) {
+      bot.log('warning', `[AUTO-BUY] Skipped ${candidate.coin.symbol}: ${now.reason}`, { coinSymbol: candidate.coin.symbol });
+      return;
+    }
+    coin = { ...coin, priceUsd: now.priceUsd };
+  }
+  const r = await bot.manualSnipeCoin(coin, amountUsd, reason, {
+    tp,
+    sl,
+    timeStopMinutes: candidate.setup === 'launch' ? LAUNCH_TIME_STOP_MINUTES : undefined,
+  });
   bot.log(r.success ? 'buy' : 'warning', `[AUTO-BUY] ${candidate.coin.symbol}: ${r.message}`, { coinSymbol: candidate.coin.symbol });
   if (!r.success) {
     useBotStore.setState({ latestToastNotification: { title: `Auto-buy failed: ${candidate.coin.symbol}`, description: r.message, type: 'error', coinSymbol: candidate.coin.symbol } });
   }
 }
+
+/**
+ * The scanner (every minute) and the launch watcher (any second) both hand Ready signals to the
+ * auto-buy. One at a time, so two of them can never both see room under maxPositions and both buy.
+ */
+let autoBuyChain: Promise<void> = Promise.resolve();
+const runAutoBuy = (ready: ScanSignal[]) => (autoBuyChain = autoBuyChain.then(() => autoBuy(ready)).catch(() => {}));
+
+const LAUNCH_REFRESH_MS = 5_000;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
@@ -233,6 +272,25 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
   const schedule = () => {
     if (timer) clearTimeout(timer);
     timer = get().enabled ? setTimeout(() => void get().scanNow(), SCAN_INTERVAL_MS) : null;
+  };
+
+  /** The launch watcher runs while the scanner does and new launches are switched on in Settings. */
+  const syncLaunchWatcher = () => {
+    const on = get().enabled && useBotStore.getState().settings.scanLaunches;
+    if (on && !LaunchWatcher.isRunning()) {
+      LaunchWatcher.start({
+        onReady: (signal) => {
+          if (get().alerts) notify(signal);
+          void runAutoBuy([signal]);
+        },
+        smartWallets: () => useBotStore.getState().settings.smartWallets || [],
+        buyAmountUsd: () => useBotStore.getState().settings.buyAmountUsd,
+        priorityFeeSol: () => useBotStore.getState().settings.priorityFeeSol,
+      });
+    } else if (!on && LaunchWatcher.isRunning()) {
+      LaunchWatcher.stop();
+      set({ launches: [], launchWatched: 0 });
+    }
   };
 
   return {
@@ -245,6 +303,8 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
     error: null,
     readyIds: [],
     autoSince: null,
+    launches: [],
+    launchWatched: 0,
 
     init: () => {
       if (initialized || typeof window === 'undefined') return;
@@ -263,6 +323,15 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') restartIfStale();
       });
+
+      syncLaunchWatcher();
+      useBotStore.subscribe((s, prev) => {
+        if (s.settings.scanLaunches !== prev.settings.scanLaunches) syncLaunchWatcher();
+      });
+      setInterval(() => {
+        if (!LaunchWatcher.isRunning()) return;
+        set({ launches: LaunchWatcher.signals().filter((s) => s.status !== 'rejected').slice(0, 8), launchWatched: LaunchWatcher.watchedCount() });
+      }, LAUNCH_REFRESH_MS);
     },
 
     startAutoTrade: () => {
@@ -283,6 +352,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
       writePrefs({ enabled: on, alerts: get().alerts });
       if (on) void get().scanNow();
       else schedule();
+      syncLaunchWatcher();
     },
 
     setAlerts: async (on) => {
@@ -319,7 +389,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
         const ready = result.signals.filter((s) => s.status === 'ready' && (s.score?.total ?? 0) >= minScore);
         const previous = new Set(get().readyIds);
         if (get().alerts) ready.filter((s) => !previous.has(s.id)).forEach(notify);
-        await autoBuy(ready);
+        await runAutoBuy(ready);
 
         const error = result.candidateCount === 0 ? 'No market data came back - the data APIs may be rate-limiting. Retrying next minute.' : null;
         set({
@@ -362,6 +432,16 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
           watch: result.signals.filter((s) => s.status === 'watch').slice(0, 8).map(brief),
           rejectedBy: [...rejectedBy.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([reason, count]) => ({ reason, count })),
           error,
+          launches: LaunchWatcher.isRunning()
+            ? {
+                watching: LaunchWatcher.watchedCount(),
+                signals: LaunchWatcher.signals()
+                  .filter((s) => s.status !== 'rejected')
+                  .slice(0, 6)
+                  .map((s) => ({ ...brief(s), holders: s.launch?.holders, curvePercent: s.launch ? Math.round(s.launch.curvePercent) : undefined })),
+                droppedBy: LaunchWatcher.dropReasons().slice(0, 6),
+              }
+            : null,
         });
       } catch (err) {
         set({ error: err instanceof Error ? err.message : 'Scan failed' });

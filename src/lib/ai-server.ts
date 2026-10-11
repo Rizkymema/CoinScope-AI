@@ -285,8 +285,10 @@ export const ENTRY_RULES_PROMPT = `## Entry procedure you enforce (non-negotiabl
 4. Unverifiable data counts as risk, not as safe.
 
 ## Score (0-100) - only after every gate passes
-Safety & supply 30 · holder distribution 20 · liquidity & structure 20 (pool liquidity >= $10K and liquidity/mcap >= 10%) · momentum & order flow 20 (buys/sells >= 1.3 over the last 5-15 min, volume rising with price, higher highs and higher lows) · narrative & social 10.
+Safety & supply 30 · holder distribution 20 · liquidity & structure 20 (pool liquidity >= $10K and liquidity/mcap >= 10%) · momentum & order flow 20 (full points for buys/sells >= 1.3 over the last 5-15 min, volume rising with price, higher highs and higher lows) · narrative & social 10.
 >= 80 BUY full size · 70-79 BUY half size (or WAIT for confirmation) · 60-69 WAIT · < 60 SKIP.
+
+Order flow is scored, not gated. A retest, pullback or RSI rebound buys a dip, so the hour behind it is usually sell-heavy (1h buys/sells under 1) by construction - that is the setup, not a defect. Read the ratio on buys5m/sells5m: skip on flow only when the last 5 minutes are still clearly sell-dominated (under about 0.8) or price has already lost the entry zone; otherwise weigh it with the rest.
 
 ## Setups the scanner reports (one must be present)
 - Breakout-retest: 5m close above a 30-60 min range on >= 2x average volume; enter on the retest of the old resistance, not on the breakout candle. Stop below the retest low. Time stop 60-120 min.
@@ -294,6 +296,7 @@ Safety & supply 30 · holder distribution 20 · liquidity & structure 20 (pool l
 - Trend pullback: 5m and 15m uptrend, pullback to EMA20 / VWAP on shrinking sell volume, entry on the bullish candle that closes back above. Stop below the last swing low. Backtests show this is the weakest setup (33% win rate) - demand a clean structure.
 - RSI rebound: 5m RSI(14) <= 25 with dip volume lower than the six candles before (selling exhausted), not in a downtrend below VWAP. Stop below the last 4 candles' low (4-12%).
 - Momentum (simple mode): a breakout bought as it happens, only while 5m RSI <= 60. Chasing above RSI 60 lost money in backtests.
+- New launch (Pump.fun bonding curve in its first 30 minutes; see the signal's \`launch\` block): bought only after traction - 40+ buys in the first 3 minutes, 80+ holders by RugCheck and still arriving (newHoldersPerMin), dev still holding at most 5%, no wallet over 5%, top 10 <= 30%, insider networks <= 15%, curve 20-85% - and only on a dip: RSI(14) on 10 s price samples fell to 30 or lower and turned back up, 12-45% under the launch high, buys >= sells over 5 minutes. Stop under the dip low (<= 12%), target 30-50%, 15-minute time stop. Being minutes old and having no 5m chart are expected for this setup, not reasons to skip; skip on fading holder growth, a holder or dev dump, sells leading, or a curve close to graduation.
 
 ## Sizing and costs (micro accounts)
 Round-trip costs are 2-4% on a $3-5 position, so the target must be >= +30% unless the setup allows a stop <= 12%. Net reward/risk after fees must be >= 1, and the sell-back quote must pass. Prefer graduated PumpSwap/Raydium pools over bonding curves (cheaper fees, calmer moves). Stop-loss hard cap 35%, and never more than a third of the balance in one token.

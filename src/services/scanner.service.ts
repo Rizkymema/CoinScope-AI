@@ -70,7 +70,26 @@ const MIN_HOLDERS = 150;
 /** Smart-wallet discovery adds at most this many held tokens per scan, most-held first. */
 const MAX_SMART_CANDIDATES = 40;
 
-export type SetupKind = 'breakout' | 'flag' | 'pullback' | 'momentum' | 'rebound';
+export type SetupKind = 'breakout' | 'flag' | 'pullback' | 'momentum' | 'rebound' | 'launch';
+
+/** What the launch watcher measured for a Pump.fun token in its first 30 minutes. */
+export interface LaunchFacts {
+  ageMinutes: number;
+  /** Holders counted by RugCheck. */
+  holders: number;
+  /** Holders gained per minute over the last few RugCheck reads. */
+  newHoldersPerMin: number;
+  /** Buy transactions since launch. */
+  buys: number;
+  curvePercent: number;
+  devPct: number;
+  /** The creator has sold more than half of its launch buy. */
+  devSold: boolean;
+  /** How far price sits under the launch high, in %. */
+  drawdownPct: number;
+  /** Tracked smart wallets among the top holders. */
+  smartBuyers: number;
+}
 export type SignalStatus = 'ready' | 'watch' | 'rejected';
 
 export interface ScanGates {
@@ -109,6 +128,9 @@ export interface ScanSignal {
   volume1hUsd: number;
   buys1h: number;
   sells1h: number;
+  /** Last 5 minutes: the window the entry procedure's buy/sell ratio is measured on. */
+  buys5m: number;
+  sells5m: number;
   gates?: ScanGates;
   score?: ScanScore;
   entryLow?: number;
@@ -127,6 +149,8 @@ export interface ScanSignal {
   rsi?: number;
   /** How many of the user's tracked smart wallets hold this token. */
   smartWallets?: number;
+  /** Launch-watcher measurements (setup 'launch' only). */
+  launch?: LaunchFacts;
 }
 
 export interface ScanResult {
@@ -205,7 +229,15 @@ const px = (v: number) => `$${v.toPrecision(4)}`;
 async function candidateMints(): Promise<string[]> {
   const mints = await cached('mints', 5 * 60_000, async () => {
     const found = new Set<string>();
-    const geckoLists = ['new_pools?page=1', 'trending_pools?page=1&duration=1h', 'trending_pools?page=1&duration=6h', 'pools?page=1&sort=h24_volume_usd_desc'];
+    // Trending lists plus the pools with the most transactions: the coins people are buying most.
+    const geckoLists = [
+      'new_pools?page=1',
+      'trending_pools?page=1&duration=5m',
+      'trending_pools?page=1&duration=1h',
+      'trending_pools?page=1&duration=6h',
+      'pools?page=1&sort=h24_tx_count_desc',
+      'pools?page=1&sort=h24_volume_usd_desc',
+    ];
     // Sequential on purpose, and skipped during a rate-limit pause (DexScreener lists still run).
     for (const path of geckoLists) {
       if (Date.now() < geckoCooldownUntil) break;
@@ -252,7 +284,8 @@ function prefilter(pair: any, isClone: boolean): string | null {
   const trades = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
   const socials = (pair.info?.socials?.length || 0) + (pair.info?.websites?.length || 0);
 
-  if (liq < 25_000) return `Liquidity ${usdK(liq)} is under $25K`;
+  // The skill asks for $10K+; $15K leaves a margin and still moves a micro-account buy by under 0.1%.
+  if (liq < 15_000) return `Liquidity ${usdK(liq)} is under $15K`;
   if (mcap < 80_000 || mcap > 30_000_000) return `Market cap ${usdK(mcap)} is outside $80K-$30M`;
   if (liq > mcap) return 'Liquidity larger than market cap - pool anomaly';
   if (liq / mcap < 0.05) return 'Liquidity under 5% of market cap';
@@ -266,37 +299,71 @@ function prefilter(pair: any, isClone: boolean): string | null {
 
 /* ------------------------------------------------------------------ safety gates */
 
-async function safetyGates(mint: string): Promise<ScanGates | null> {
-  return cached(`rugcheck:${mint}`, 10 * 60_000, async () => {
+export interface RugMetrics {
+  top10Pct: number;
+  maxHolderPct: number;
+  insiderPct: number;
+  devPct: number;
+  holders: number;
+  /** Owners of the largest real (non-pool, non-exchange) holdings, largest first. */
+  topOwners: string[];
+  /** Set when the contract itself disqualifies the token (authorities, rugged, Token-2022 traps). */
+  contractRisk?: string;
+}
+
+/** A RugCheck report reduced to what the gates read; null when RugCheck did not answer. */
+export async function rugMetrics(mint: string, ttlMs = 10 * 60_000): Promise<RugMetrics | null> {
+  return cached(`rugcheck:${mint}`, ttlMs, async () => {
     const r = await getJson(`${RUGCHECK}/${mint}/report`);
     if (!r) return null;
     const known = r.knownAccounts || {};
     const supply = Number(r.token?.supply) || 0;
     // Pools, curves and exchange wallets are listed as known accounts and are not real holders.
     const holders = (r.topHolders || []).filter((h: any) => !known[h.owner] && !known[h.address]);
-    const top10Pct = holders.slice(0, 10).reduce((a: number, h: any) => a + (Number(h.pct) || 0), 0);
-    const maxHolderPct = Number(holders[0]?.pct) || 0;
     const insiderAmount = (r.insiderNetworks || []).reduce((a: number, n: any) => a + (Number(n.tokenAmount) || 0), 0);
-    const insiderPct = supply ? (100 * insiderAmount) / supply : 0;
-    const devPct = supply ? (100 * (Number(r.creatorBalance) || 0)) / supply : 0;
-    const holderCount = Number(r.totalHolders) || 0;
     const ext = r.token_extensions || {};
-
-    let failure: string | undefined;
-    if (r.mintAuthority) failure = 'Mint authority is still set';
-    else if (r.freezeAuthority) failure = 'Freeze authority is still set';
-    else if (r.rugged) failure = 'RugCheck marks it as rugged';
-    else if (ext.permanentDelegate) failure = 'Token-2022 permanent delegate';
-    else if (ext.transferFeeConfig) failure = 'Token-2022 transfer fee';
-    else if (maxHolderPct > 5) failure = `One wallet holds ${maxHolderPct.toFixed(1)}%`;
-    else if (top10Pct > 30) failure = `Top 10 wallets hold ${top10Pct.toFixed(0)}%`;
-    else if (insiderPct > 15) failure = `Insider networks hold ${insiderPct.toFixed(0)}%`;
-    else if (devPct > 5) failure = `Dev still holds ${devPct.toFixed(1)}%`;
-    // 0 means RugCheck did not count them, which is not the same as having none.
-    else if (holderCount > 0 && holderCount < MIN_HOLDERS) failure = `Only ${holderCount} holders - too few real buyers for its volume`;
-
-    return { top10Pct, maxHolderPct, insiderPct, devPct, holders: holderCount, passed: !failure, failure };
+    const contractRisk = r.mintAuthority
+      ? 'Mint authority is still set'
+      : r.freezeAuthority
+      ? 'Freeze authority is still set'
+      : r.rugged
+      ? 'RugCheck marks it as rugged'
+      : ext.permanentDelegate
+      ? 'Token-2022 permanent delegate'
+      : ext.transferFeeConfig
+      ? 'Token-2022 transfer fee'
+      : undefined;
+    return {
+      top10Pct: holders.slice(0, 10).reduce((a: number, h: any) => a + (Number(h.pct) || 0), 0),
+      maxHolderPct: Number(holders[0]?.pct) || 0,
+      insiderPct: supply ? (100 * insiderAmount) / supply : 0,
+      devPct: supply ? (100 * (Number(r.creatorBalance) || 0)) / supply : 0,
+      holders: Number(r.totalHolders) || 0,
+      topOwners: holders.map((h: any) => String(h.owner || '')).filter(Boolean),
+      contractRisk,
+    };
   });
+}
+
+async function safetyGates(mint: string): Promise<ScanGates | null> {
+  const m = await rugMetrics(mint);
+  if (!m) return null;
+  const { top10Pct, maxHolderPct, insiderPct, devPct, holders } = m;
+  const failure =
+    m.contractRisk ??
+    (maxHolderPct > 5
+      ? `One wallet holds ${maxHolderPct.toFixed(1)}%`
+      : top10Pct > 30
+      ? `Top 10 wallets hold ${top10Pct.toFixed(0)}%`
+      : insiderPct > 15
+      ? `Insider networks hold ${insiderPct.toFixed(0)}%`
+      : devPct > 5
+      ? `Dev still holds ${devPct.toFixed(1)}%`
+      : // 0 means RugCheck did not count them, which is not the same as having none.
+      holders > 0 && holders < MIN_HOLDERS
+      ? `Only ${holders} holders - too few real buyers for its volume`
+      : undefined);
+  return { top10Pct, maxHolderPct, insiderPct, devPct, holders, passed: !failure, failure };
 }
 
 /* ------------------------------------------------------------------ chart setups */
@@ -608,7 +675,7 @@ function scoreOf(pair: any, g: ScanGates, read: ChartRead, smartHolders: number)
   return { safety: Math.round(safety), holders, liquidity, momentum, social, total: Math.round(safety + holders + liquidity + momentum + social) };
 }
 
-async function swapCheck(mint: string, lamports: number): Promise<SwapCheck> {
+export async function swapCheck(mint: string, lamports: number): Promise<SwapCheck> {
   const result = await cached<SwapCheck>(`swap:${mint}:${lamports}`, 2 * 60_000, async () => {
     const q = (input: string, output: string, amount: string | number) =>
       getJson(`${JUPITER}/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=500&restrictIntermediateTokens=true`);
@@ -651,6 +718,8 @@ export const ScannerService = {
       volume1hUsd: Number(pair.volume?.h1) || 0,
       buys1h: pair.txns?.h1?.buys || 0,
       sells1h: pair.txns?.h1?.sells || 0,
+      buys5m: pair.txns?.m5?.buys || 0,
+      sells5m: pair.txns?.m5?.sells || 0,
       smartWallets: smartCount(pair.baseToken.address) || undefined,
     });
 

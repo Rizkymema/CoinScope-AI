@@ -32,6 +32,7 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'scannerAutoBuy',
   'scannerMode',
   'smartWallets',
+  'scanLaunches',
   'aiModel',
 ];
 

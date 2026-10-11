@@ -86,6 +86,11 @@ export interface BotSettings {
    * they hold to its candidates and shows how many of them hold each signal.
    */
   smartWallets: string[];
+  /**
+   * Watch every new Pump.fun launch for its first 30 minutes and let auto trade buy the ones that
+   * draw buyers fast, pass the holder checks and dip on RSI (the launch watcher).
+   */
+  scanLaunches: boolean;
 }
 
 export interface BotPosition {
@@ -104,6 +109,10 @@ export interface BotPosition {
   slPriceUsd: number;
   /** Set once the profit lock has raised slPriceUsd above the position's cost. */
   profitLocked?: boolean;
+  /** Close the position when it has made no new high for this many minutes (new launches). */
+  timeStopMinutes?: number;
+  /** When highPriceUsd was last raised. */
+  highAt?: number;
   /** true when the position was opened by a real on-chain swap. */
   isLive: boolean;
   /** Solana mint address (live positions). */
@@ -143,7 +152,7 @@ export interface BotTradeHistory {
   pnlPercent: number;
   boughtAt: number;
   soldAt: number;
-  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'PROFIT_LOCK' | 'MANUAL_SELL' | 'AI_SELL';
+  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'PROFIT_LOCK' | 'TIME_STOP' | 'MANUAL_SELL' | 'AI_SELL';
   isLive: boolean;
   buyTxSignature?: string;
   sellTxSignature?: string;

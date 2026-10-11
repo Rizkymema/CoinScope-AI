@@ -21,6 +21,9 @@ export interface ScannerSignalBrief {
   rsi?: number;
   /** Tracked smart wallets holding it. */
   smartWallets?: number;
+  /** New launches: holders and bonding-curve progress seen on the stream. */
+  holders?: number;
+  curvePercent?: number;
 }
 
 export interface ScannerSummary {
@@ -32,6 +35,8 @@ export interface ScannerSummary {
   /** How many rejections each reason caused this scan, most common first. */
   rejectedBy: { reason: string; count: number }[];
   error: string | null;
+  /** Launch watcher: tokens streamed now, the best ready/watching ones, and why launches were dropped (last 30 min). */
+  launches?: { watching: number; signals: ScannerSignalBrief[]; droppedBy: { reason: string; count: number }[] } | null;
 }
 
 let latest: ScannerSummary | null = null;

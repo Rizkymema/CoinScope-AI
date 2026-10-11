@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { CoinAnalysis, CoinData } from '../types/coin';
 import { AiDecision, BotSettings, BotStats } from '../types/bot';
+import type { LaunchFacts } from './scanner.service';
 
 /** Compact scanner signal sent to the gate (mirrors ScannerSignalBrief plus the gate facts). */
 export interface SignalForGate {
@@ -16,6 +17,8 @@ export interface SignalForGate {
   volume1hUsd: number;
   buys1h: number;
   sells1h: number;
+  buys5m: number;
+  sells5m: number;
   rsi?: number;
   entryLow?: number;
   entryHigh?: number;
@@ -27,6 +30,8 @@ export interface SignalForGate {
   costPercent?: number;
   netRewardRisk?: number;
   smartWallets?: number;
+  /** New launches only: what the launch watcher measured on the trade stream. */
+  launch?: LaunchFacts;
   gates?: { top10Pct: number; maxHolderPct: number; insiderPct: number; devPct: number; holders: number };
   score?: { safety: number; holders: number; liquidity: number; momentum: number; social: number; total: number };
   sellBack?: { sellable: boolean; roundTripPct?: number };
@@ -113,9 +118,9 @@ export const AIService = {
   },
 
   /** One model turn of the control chat. The caller executes any tool_use blocks and calls again. */
-  async chatTurn(messages: ChatMessageParam[], snapshot: unknown, model?: string): Promise<ChatTurnResult> {
+  async chatTurn(messages: ChatMessageParam[], model?: string): Promise<ChatTurnResult> {
     try {
-      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, snapshot, model }, 90_000);
+      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, model }, 90_000);
       return data;
     } catch (err: any) {
       return { content: [], stop_reason: null, error: err?.message || 'AI chat failed' };

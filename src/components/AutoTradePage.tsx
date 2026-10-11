@@ -142,9 +142,10 @@ export const AutoTradePage: React.FC = () => {
                 <span className={live ? 'chip chip-neg' : 'chip chip-warn'}>{live ? 'Live funds' : 'Paper'}</span>
               </div>
               <p className="text-[13px] text-slate-400 mt-1.5 max-w-2xl leading-relaxed">
-                Every minute the scanner checks Solana tokens for safety and a confirmed chart setup. Each Ready signal
-                {aiOn ? ' is reviewed by Claude, and the approved ones are' : ' is'} bought with the signal&apos;s stop and target, then managed
-                with take-profit, stop-loss and profit lock until it closes.
+                Every minute the scanner checks Solana tokens for safety and a confirmed chart setup
+                {settings.scanLaunches ? ', and new Pump.fun launches are followed for their first 30 minutes until buyers pile in and RSI dips' : ''}. Each Ready
+                signal{aiOn ? ' is reviewed by Claude, and the approved ones are' : ' is'} bought with the signal&apos;s stop and target, then managed with
+                take-profit, stop-loss and profit lock until it closes.
               </p>
               <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
                 <span className="chip" title="Scanner heartbeat">
