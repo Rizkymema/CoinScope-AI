@@ -6,7 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
 import { useBotStore } from '@/store/useBotStore';
 import { minEntryScore, MOMENTUM_MAX_RSI, ScanSignal, SetupKind } from '@/services/scanner.service';
-import { LAUNCH_TIME_STOP_MINUTES, MIN_LAUNCH_SCORE } from '@/services/launch.service';
+import { LAUNCH_TIME_STOP_MINUTES, MIN_LAUNCH_HOLDERS, MIN_LAUNCH_SCORE } from '@/services/launch.service';
 import { isSolanaAddress, MAX_SMART_WALLETS } from '@/services/smartwallet.service';
 import { CoinAvatar } from './CoinAvatar';
 import { formatNumber, formatPrice, timeAgo } from '@/lib/formatters';
@@ -257,7 +257,7 @@ const LaunchSignals: React.FC = () => {
         </p>
       ) : launches.length === 0 ? (
         <p className="panel px-4 py-4 text-[13px] text-slate-400">
-          No launch has passed the holder checks yet. Most new tokens never reach 80 holders; the ones that do show up here with their dip trigger.
+          No launch has passed the holder checks yet. Most new tokens never reach {MIN_LAUNCH_HOLDERS} holders; the ones that do show up here with their dip trigger.
         </p>
       ) : (
         launches.map((s) => <SignalCard key={`launch-${s.id}`} signal={s} />)

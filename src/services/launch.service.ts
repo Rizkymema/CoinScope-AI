@@ -4,8 +4,8 @@
  *
  *   discover  PumpPortal's free create stream names every new Pump.fun token
  *   sample    DexScreener every 10 s (price, buys/sells; it indexes a curve within ~1 minute)
- *   traction  buyers have to pile in: 40 buys by 3 minutes and 100 by 6, or the token is dropped
- *   gates     RugCheck for the ones with traction: 80+ holders, dev still holding (selling half its
+ *   traction  buyers have to pile in: 25 buys by 3 minutes and 60 by 6, or the token is dropped
+ *   gates     RugCheck for the ones with traction: 50+ holders, dev still holding (selling half its
  *             launch buy drops the token) and <= 5%, no wallet over 5%, top 10 <= 30%, insider
  *             networks <= 15%, clean contract; curve 20-85%
  *   entry     "jangan FOMO, tunggu RSI di bawah": RSI(14) on the 10 s samples sank to 30 or lower and
@@ -29,10 +29,11 @@ const RUGCHECKS_PER_POLL = 2;
 const RUG_TTL_MS = 60_000;
 /** [age, minimum buy transactions since launch]: a launch that misses one is dropped. */
 const TRACTION: [number, number][] = [
-  [3 * 60_000, 40],
-  [6 * 60_000, 100],
+  [3 * 60_000, 25],
+  [6 * 60_000, 60],
 ];
-const MIN_HOLDERS = 80;
+/** Loosened from 80 (and traction from 40 / 100 buys) on 2026-10-11 to trade more often, run in paper first. */
+export const MIN_LAUNCH_HOLDERS = 50;
 const MAX_TOP10_PCT = 30;
 const MAX_WALLET_PCT = 5;
 const MAX_DEV_PCT = 5;
@@ -178,7 +179,7 @@ function scoreOf(w: Watch, f: LaunchFacts): ScanScore {
   const safety = r
     ? clamp(30 - Math.max(0, r.top10Pct - 15) * 0.6 - Math.max(0, r.maxHolderPct - 2) * 2 - r.insiderPct * 0.6 - Math.max(0, f.devPct - 2) * 1.5, 0, 30)
     : 0;
-  const holders = f.holders >= 300 ? 20 : f.holders >= 200 ? 17 : f.holders >= 120 ? 14 : f.holders >= MIN_HOLDERS ? 11 : 7;
+  const holders = f.holders >= 300 ? 20 : f.holders >= 200 ? 17 : f.holders >= 120 ? 14 : f.holders >= MIN_LAUNCH_HOLDERS ? 11 : 7;
   const liquidity = f.curvePercent >= 25 && f.curvePercent <= 70 ? 20 : f.curvePercent >= CURVE_MIN && f.curvePercent <= CURVE_MAX ? 14 : 8;
   const momentum = (ratio >= 1.5 ? 10 : ratio >= 1.2 ? 8 : ratio >= 1 ? 6 : 2) + (f.newHoldersPerMin >= 30 ? 10 : f.newHoldersPerMin >= 15 ? 7 : f.newHoldersPerMin >= 5 ? 4 : 1);
   const socials = (w.pair?.info?.socials?.length || 0) + (w.pair?.info?.websites?.length || 0);
@@ -226,7 +227,7 @@ function baseSignal(w: Watch, f: LaunchFacts, status: SignalStatus, reason: stri
 function gateFailure(w: Watch, f: LaunchFacts): string | null {
   const r = w.rug;
   if (!r) return f.buys < TRACTION[0][1] ? `${f.buys} buys - waiting for ${TRACTION[0][1]}` : 'Traction - waiting for RugCheck';
-  if (f.holders < MIN_HOLDERS) return `${f.holders} holders - waiting for ${MIN_HOLDERS}`;
+  if (f.holders < MIN_LAUNCH_HOLDERS) return `${f.holders} holders - waiting for ${MIN_LAUNCH_HOLDERS}`;
   if (f.devPct > MAX_DEV_PCT) return `Dev holds ${f.devPct.toFixed(1)}%`;
   if (r.maxHolderPct > MAX_WALLET_PCT) return `One wallet holds ${r.maxHolderPct.toFixed(1)}%`;
   if (r.top10Pct > MAX_TOP10_PCT) return `Top 10 wallets hold ${r.top10Pct.toFixed(0)}%`;
