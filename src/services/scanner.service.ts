@@ -34,7 +34,7 @@ const IGNORED_MINTS = new Set([
  * stalest - and evaluates every safe candidate from a cache, so coverage rotates instead of only
  * the most active tokens ever being looked at. A 429 pauses chart fetches for a minute.
  */
-const MAX_FETCHES_PER_SCAN = 5;
+const MAX_FETCHES_PER_SCAN = 8;
 const CHART_SPACING_MS = 1500;
 const CANDLE_TTL_MS = 5 * 60_000;
 const PRIORITY_CANDLE_TTL_MS = 45_000;
@@ -236,6 +236,8 @@ async function candidateMints(): Promise<string[]> {
       'trending_pools?page=1&duration=1h',
       'trending_pools?page=1&duration=6h',
       'pools?page=1&sort=h24_tx_count_desc',
+      'pools?page=2&sort=h24_tx_count_desc',
+      'trending_pools?page=2&duration=1h',
       'pools?page=1&sort=h24_volume_usd_desc',
     ];
     // Sequential on purpose, and skipped during a rate-limit pause (DexScreener lists still run).
@@ -284,8 +286,8 @@ function prefilter(pair: any, isClone: boolean): string | null {
   const trades = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
   const socials = (pair.info?.socials?.length || 0) + (pair.info?.websites?.length || 0);
 
-  // The skill asks for $10K+; $15K leaves a margin and still moves a micro-account buy by under 0.1%.
-  if (liq < 15_000) return `Liquidity ${usdK(liq)} is under $15K`;
+  // The skill's floor: a micro-account buy still moves a $10K pool by well under 0.1%.
+  if (liq < 10_000) return `Liquidity ${usdK(liq)} is under $10K`;
   if (mcap < 80_000 || mcap > 30_000_000) return `Market cap ${usdK(mcap)} is outside $80K-$30M`;
   if (liq > mcap) return 'Liquidity larger than market cap - pool anomaly';
   if (liq / mcap < 0.05) return 'Liquidity under 5% of market cap';

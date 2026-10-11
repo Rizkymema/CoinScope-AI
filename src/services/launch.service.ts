@@ -49,7 +49,8 @@ const MIN_STOP = 0.06;
 /** Same cap as the scanner: the user's auto-buy limit is a stop of 12% at most. */
 const MAX_STOP = 0.12;
 export const LAUNCH_TIME_STOP_MINUTES = 15;
-export const MIN_LAUNCH_SCORE = 70;
+/** 65, not the scanner's 70: a launch minutes old rarely has socials, so it can hardly earn social points. */
+export const MIN_LAUNCH_SCORE = 65;
 /** A launch goes to confirmation at most this often. */
 const READY_REPEAT_MS = 60_000;
 
