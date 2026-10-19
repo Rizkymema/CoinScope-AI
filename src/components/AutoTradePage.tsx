@@ -254,7 +254,7 @@ export const AutoTradePage: React.FC = () => {
               </label>
             </div>
             <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
-              Stops and targets come from each signal (stop ≤ 12%). Profit lock +{settings.profitLockTriggerPercent}% → +{settings.profitLockPercent}%.
+              Stops and targets come from each signal (stop ≤ 12%, reward above risk after fees). Profit lock arms half way to each target (at most +{settings.profitLockTriggerPercent}%) and keeps at least +3%, so a trade that got that far closes green.
             </p>
           </Step>
 
@@ -284,8 +284,8 @@ export const AutoTradePage: React.FC = () => {
                 : aiKey === null
                 ? 'Checking the Claude key…'
                 : aiKey.configured
-                ? `Claude reviews every Ready signal against the entry rules; buys need ≥ ${settings.aiMinConfidence}% confidence.`
-                : 'No ANTHROPIC_API_KEY on the server — entries are held until it is set.'}
+                ? `Claude reviews every Ready signal against the entry rules; buys need ≥ ${settings.aiMinConfidence}% confidence. If Claude cannot answer, paper mode enters at half size and live mode retries next scan.`
+                : 'No ANTHROPIC_API_KEY on the server — entries use the scanner checks alone until it is set.'}
             </p>
           </Step>
         </div>

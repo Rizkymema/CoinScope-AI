@@ -5,7 +5,7 @@ import { AIService, ChatMessageParam, ChatToolUseBlock, ChatToolResultParam } fr
 import { executeBotTool } from '@/lib/bot-tool-executor';
 import { useCoinStore } from '@/store/useCoinStore';
 import { useBotStore } from '@/store/useBotStore';
-import { Send, Bot, User, Loader2, X, MessageSquare, Wrench, AlertTriangle } from 'lucide-react';
+import { Send, Bot, User, Loader2, X, MessageSquare, Wrench, AlertTriangle, RotateCcw } from 'lucide-react';
 
 interface ChatMessage {
   id: string;
@@ -18,7 +18,7 @@ interface ChatMessage {
 const MAX_TOOL_ROUNDS = 8;
 
 const QUICK_PROMPTS = [
-  'Show the 5 most promising new launches',
+  'Which scanner signals are ready to enter now?',
   'What is the bot status and my open positions?',
   'Start the bot with TP 80% and SL 25%',
   'Sell every position that is currently down',
@@ -31,6 +31,8 @@ export const AIJudgeChat: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [aiUnavailable, setAiUnavailable] = useState<string | null>(null);
   const historyRef = useRef<ChatMessageParam[]>([]);
+  /** Model that wrote the thinking blocks in the history; a switch strips them (they are bound to it). */
+  const historyModelRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const { selectedCoin, aiAnalysis } = useCoinStore();
@@ -57,6 +59,20 @@ export const AIJudgeChat: React.FC = () => {
     const contextNote = selected
       ? `\n\n[Context: user currently has ${selected.symbol} (${selected.id}) selected in the dashboard]`
       : '';
+    // Thinking blocks are only valid for the model that wrote them. Earlier, finished turns may drop
+    // them (only the tool loop in progress must keep its own), so a model switch strips them.
+    const model = useBotStore.getState().settings.aiModel;
+    if (historyModelRef.current && historyModelRef.current !== model) {
+      historyRef.current = historyRef.current
+        .map((m) =>
+          m.role === 'assistant' && Array.isArray(m.content)
+            ? { ...m, content: m.content.filter((b: any) => b.type !== 'thinking' && b.type !== 'redacted_thinking') }
+            : m
+        )
+        // An assistant message left with nothing in it would fail every later request.
+        .filter((m) => !(m.role === 'assistant' && Array.isArray(m.content) && m.content.length === 0));
+    }
+    historyModelRef.current = model;
     const turnStart = historyRef.current.length;
     // The live state rides in the user turn and is never rewritten afterwards: the history goes
     // back to Claude with its thinking blocks, which stay valid only while what precedes them is
@@ -74,29 +90,41 @@ export const AIJudgeChat: React.FC = () => {
 
     const assistantId = `a-${Date.now()}`;
     pushMessage({ id: assistantId, role: 'assistant', content: '', isStreaming: true });
-    await continueLoop(assistantId, 0, userText, turnStart);
+    await continueLoop(assistantId, 0, userText, turnStart, model);
   };
 
   /** Continues the tool loop after the first round, writing into `bubbleId`. */
-  const continueLoop = async (bubbleId: string, startRound: number, userText: string, turnStart: number): Promise<string> => {
+  const continueLoop = async (bubbleId: string, startRound: number, userText: string, turnStart: number, model: string): Promise<string> => {
     let rounds = startRound;
     let currentBubble = bubbleId;
+    /**
+     * Ends a turn that failed. Before any tool ran, the whole turn is rolled back so the question can
+     * simply be asked again. Once tools have run (a buy may already be filled), their rounds stay in
+     * the history - it ends on a tool_result, which is valid - so Claude still knows what happened.
+     */
+    const abandon = (content: string, isError: boolean) => {
+      if (rounds <= 1) historyRef.current.length = turnStart;
+      patchMessage(currentBubble, { content, isStreaming: false, isError });
+      return content;
+    };
     while (rounds < MAX_TOOL_ROUNDS) {
       rounds += 1;
-      const turn = await AIService.chatTurn(historyRef.current, useBotStore.getState().settings.aiModel);
+      // The model chosen when the question was sent, for every round: thinking blocks are bound to it.
+      const turn = await AIService.chatTurn(historyRef.current, model);
       if (turn.error) {
-        const noKey = /ANTHROPIC_API_KEY/i.test(turn.error);
+        const noKey = /not configured/i.test(turn.error);
         if (noKey) setAiUnavailable(turn.error);
-        // Roll the whole failed turn back, tool rounds included, so the next attempt never sends a
-        // tool_use without its result.
-        historyRef.current.length = turnStart;
-        const text = noKey ? AIService.localReply(userText, useCoinStore.getState().selectedCoin, aiAnalysis) : turn.error;
-        patchMessage(currentBubble, { content: text, isStreaming: false, isError: !noKey });
-        return text;
+        return abandon(noKey ? AIService.localReply(userText, useCoinStore.getState().selectedCoin, aiAnalysis) : turn.error, !noKey);
       }
-      historyRef.current.push({ role: 'assistant', content: turn.content });
-      const textParts = turn.content.filter((b) => b.type === 'text').map((b: any) => b.text as string);
-      const toolUses = turn.content.filter((b): b is ChatToolUseBlock => b.type === 'tool_use');
+      const textParts = (turn.content || []).filter((b) => b.type === 'text').map((b: any) => b.text as string);
+      const toolUses = (turn.content || []).filter((b): b is ChatToolUseBlock => b.type === 'tool_use');
+      // A turn with no text and no tool call (nothing, or only hidden thinking) is not worth keeping.
+      if (!textParts.join('').trim() && (toolUses.length === 0 || turn.stop_reason === 'refusal')) {
+        return abandon(turn.stop_reason === 'refusal' ? 'The AI declined to answer this request.' : 'The AI returned an empty answer. Please try again.', true);
+      }
+      // A refusal keeps its text but never a tool call without a result: that would break every later request.
+      const content = turn.stop_reason === 'refusal' ? turn.content.filter((b) => b.type !== 'tool_use') : turn.content;
+      historyRef.current.push({ role: 'assistant', content });
 
       if (toolUses.length === 0 || turn.stop_reason === 'refusal') {
         const text = textParts.join('\n') || 'Done.';
@@ -141,6 +169,15 @@ export const AIJudgeChat: React.FC = () => {
     }
   };
 
+  /** Clears the conversation, so a history that keeps failing can be started over. */
+  const resetChat = () => {
+    if (isProcessing) return;
+    historyRef.current = [];
+    historyModelRef.current = null;
+    setMessages([]);
+    setAiUnavailable(null);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     submit(input);
@@ -180,9 +217,22 @@ export const AIJudgeChat: React.FC = () => {
               </p>
             </div>
           </div>
-          <button onClick={() => setIsOpen(false)} className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-white/5 transition-colors" aria-label="Close chat">
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              <button
+                onClick={resetChat}
+                disabled={isProcessing}
+                className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
+                aria-label="New chat"
+                title="New chat"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={() => setIsOpen(false)} className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-white/5 transition-colors" aria-label="Close chat">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 p-3.5 overflow-y-auto space-y-2.5">

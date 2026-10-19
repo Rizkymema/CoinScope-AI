@@ -1033,6 +1033,26 @@ export const useBotStore = create<BotState>()(
 /* Internal helpers (need access to the store singleton)               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * When the profit lock arms for a position, and how much profit it keeps.
+ *
+ * The setting alone (default +30%) never armed on scanner trades: their targets are usually
+ * +10-25%, so a trade could run most of the way to its target and still close at the stop for a
+ * loss. The lock now arms at half the way to the position's own target (never under +8% unless the
+ * setting is lower, never later than the setting) and keeps the set profit, at least +3% over cost
+ * (the sell's fees), so a
+ * trade that got that far closes in profit. 0 in the setting still turns it off.
+ */
+function profitLockLevels(pos: BotPosition, settings: BotSettings): { triggerPercent: number; lockPercent: number } | null {
+  if (!(settings.profitLockTriggerPercent > 0)) return null;
+  const tpPercent = pos.buyPriceUsd > 0 && pos.tpPriceUsd > 0 ? (pos.tpPriceUsd / pos.buyPriceUsd - 1) * 100 : settings.takeProfitPercent;
+  const triggerPercent = Math.round(Math.min(settings.profitLockTriggerPercent, Math.max(8, tpPercent * 0.5)) * 10) / 10;
+  // The user's locked profit, at least +3% for the sell's fees, and always 2 points under the trigger
+  // so the raised stop sits below the price that armed it.
+  const lockPercent = Math.round(Math.max(0, Math.min(Math.max(3, settings.profitLockPercent), triggerPercent - 2)) * 10) / 10;
+  return { triggerPercent, lockPercent };
+}
+
 function markToMarket(positionId: string, price: number, source: BotPosition['priceSource']) {
   if (!price || price <= 0) return;
   const store = useBotStore.getState();
@@ -1050,13 +1070,13 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
   // includes the buy's fees) so a trade that was already winning cannot be closed at a loss.
   let { slPriceUsd, profitLocked } = pos;
   const costPriceUsd = pos.tokensBought > 0 ? pos.amountUsd / pos.tokensBought : pos.buyPriceUsd;
-  if (settings.profitLockTriggerPercent > 0 && highPriceUsd >= costPriceUsd * (1 + settings.profitLockTriggerPercent / 100)) {
-    const lockPercent = Math.max(0, Math.min(settings.profitLockPercent, settings.profitLockTriggerPercent));
-    const lockPriceUsd = costPriceUsd * (1 + lockPercent / 100);
+  const lock = profitLockLevels(pos, settings);
+  if (lock && highPriceUsd >= costPriceUsd * (1 + lock.triggerPercent / 100)) {
+    const lockPriceUsd = costPriceUsd * (1 + lock.lockPercent / 100);
     if (lockPriceUsd > slPriceUsd) {
       slPriceUsd = lockPriceUsd;
       profitLocked = true;
-      store.log('info', `[PROFIT LOCK] ${pos.coin.symbol} reached +${settings.profitLockTriggerPercent}%: stop raised to $${lockPriceUsd.toPrecision(4)} (+${lockPercent}% over cost).`, { coinSymbol: pos.coin.symbol });
+      store.log('info', `[PROFIT LOCK] ${pos.coin.symbol} reached +${lock.triggerPercent}%: stop raised to $${lockPriceUsd.toPrecision(4)} (+${lock.lockPercent}% over cost).`, { coinSymbol: pos.coin.symbol });
     }
   }
 

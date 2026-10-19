@@ -40,7 +40,15 @@ cp .env.example .env.local   # add ANTHROPIC_API_KEY (and ideally a private Sola
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) → **Auto Trade** tab → *Start auto trade* (paper mode by default).
+Open [http://localhost:3000](http://localhost:3000), sign in, then **Auto Trade** tab → *Start auto trade* (paper mode by default).
+
+### Login
+
+The dashboard and its API routes are behind a login page (`/login`). The default user is `user1`; the
+default password is stored only as a hash. Because this repository is public, set your own credentials
+on the server with `COINSCOPE_LOGIN_USER` / `COINSCOPE_LOGIN_PASSWORD` (Vercel → Settings → Environment
+Variables). Sessions last 30 days and renew while the dashboard is in use; the log-out button is in the
+header. `/api/mcp`, `/api/oauth/*` and `/api/bridge/*` keep their own `COINSCOPE_ACCESS_KEY` auth.
 
 Tabs: **Market** (DexScreener-style list, chart, trades, safety check, buy), **New Launches**, **Auto Trade** (the one switch, signals, positions, log, history) and **Settings** (money and wallets, sizing, Claude model, RPC; launch sniper and MCP at the bottom).
 

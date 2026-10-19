@@ -63,12 +63,21 @@ export const MOMENTUM_MAX_RSI = 60;
 /** RSI rebound: RSI(14) on 5m must have sunk to this or lower before the bounce is bought. */
 export const REBOUND_RSI = 25;
 /**
- * A token past the prefilter (1h+ old, $80K+ market cap, 100+ trades an hour) with fewer holders
+ * A token past the prefilter (90+ minutes old, $80K+ market cap, 100+ trades an hour) with fewer holders
  * than this is traded by a handful of wallets - wash volume or a bundled supply.
  */
 const MIN_HOLDERS = 150;
 /** Smart-wallet discovery adds at most this many held tokens per scan, most-held first. */
 const MAX_SMART_CANDIDATES = 40;
+/**
+ * Chart history a token needs before a setup is read: 18 closed 5m candles (90 minutes). It was 24
+ * (2 hours) while the prefilter let tokens in from 1 hour, so every token between 1 and 2 hours old
+ * spent a chart fetch only to be rejected. Both now use 90 minutes.
+ */
+const MIN_CANDLES_5M = 18;
+const MIN_AGE_HOURS = MIN_CANDLES_5M / 12;
+/** A pullback / rebound whose target is capped under the 4h high must still leave this much. */
+const MIN_ROOM_UNDER_HIGH = 0.08;
 
 export type SetupKind = 'breakout' | 'flag' | 'pullback' | 'momentum' | 'rebound' | 'launch';
 
@@ -291,7 +300,7 @@ function prefilter(pair: any, isClone: boolean): string | null {
   if (mcap < 80_000 || mcap > 30_000_000) return `Market cap ${usdK(mcap)} is outside $80K-$30M`;
   if (liq > mcap) return 'Liquidity larger than market cap - pool anomaly';
   if (liq / mcap < 0.05) return 'Liquidity under 5% of market cap';
-  if (ageH < 1) return 'Younger than 1 hour';
+  if (ageH < MIN_AGE_HOURS) return 'Younger than 90 minutes';
   if ((pair.volume?.h1 || 0) < 15_000) return '1h volume under $15K';
   if (trades < 100) return 'Under 100 trades in the last hour';
   if (isClone) return 'Ticker copies an older token';
@@ -500,7 +509,7 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
   const rsiNow = rsi[rsi.length - 1];
   const base = { structure, aboveVwap, high4h, rsi: Number.isFinite(rsiNow) ? rsiNow : undefined };
 
-  if (c15.length < 8 || c5.length < 24) return { ...base, rejected: 'Under 2 hours of candles' };
+  if (c15.length < 6 || c5.length < MIN_CANDLES_5M) return { ...base, rejected: 'Under 90 minutes of candles' };
 
   // 0. Simple mode - momentum: one of the last two 5m candles closed green above the prior 30-minute
   //    high on >= 2x the previous hour's average volume, and was not a vertical (>15%) candle. It buys
@@ -541,9 +550,10 @@ export function readChart(c5raw: Candle[], maxStopPct: number, mode: ScanMode = 
   const last5 = c5[c5.length - 1];
   const stopPct = (entry: number, stop: number) => (entry - stop) / entry;
 
-  // 1. Breakout-retest: a 15m close above the prior 4h high on >= 2x volume, within the last hour.
-  for (let i = c15.length - 1; i >= Math.max(16, c15.length - 4); i--) {
-    const level = highOf(c15.slice(i - 16, i));
+  // 1. Breakout-retest: a 15m close above the prior high (up to 4h back; younger tokens use the
+  //    history they have, at least an hour) on >= 2x volume, within the last hour.
+  for (let i = c15.length - 1; i >= Math.max(4, c15.length - 4); i--) {
+    const level = highOf(c15.slice(Math.max(0, i - 16), i));
     const bar = c15[i];
     const prevVol = avg(c15.slice(i - 4, i).map((c) => c.volume));
     if (bar.close <= level || bar.volume < 2 * prevVol) continue;
@@ -662,11 +672,20 @@ function scoreOf(pair: any, g: ScanGates, read: ChartRead, smartHolders: number)
   const mcap = Number(pair.marketCap || pair.fdv) || 1;
   const buys = pair.txns?.h1?.buys || 0;
   const sells = pair.txns?.h1?.sells || 0;
-  const flow = buys / Math.max(1, sells);
+  const buys5m = pair.txns?.m5?.buys || 0;
+  const sells5m = pair.txns?.m5?.sells || 0;
+  // A retest, pullback or rebound buys a dip, so the hour behind it is sell-heavy by construction;
+  // scoring only the 1h ratio docked every one of them. The last 5 minutes count too, once they
+  // hold enough trades to mean something.
+  const flow1h = buys / Math.max(1, sells);
+  const flow5m = buys5m + sells5m >= 10 ? buys5m / Math.max(1, sells5m) : 0;
+  const flow = Math.max(flow1h, flow5m);
   const socials: { type?: string }[] = pair.info?.socials || [];
 
   const safety = clamp(30 - Math.max(0, g.top10Pct - 15) * 0.5 - Math.max(0, g.maxHolderPct - 2) * 1.5 - g.insiderPct * 0.6 - g.devPct * 2, 0, 30);
-  const holders = g.holders >= 20_000 ? 20 : g.holders >= 10_000 ? 17 : g.holders >= 5_000 ? 14 : g.holders >= 2_000 ? 11 : 7;
+  // Scaled for memecoins: the old scale needed 20,000 holders for full points and gave the same 7
+  // points to every token under 2,000 - most tradable ones - so few could reach the entry score.
+  const holders = g.holders >= 3_000 ? 20 : g.holders >= 1_500 ? 17 : g.holders >= 700 ? 14 : g.holders >= 300 ? 11 : 7;
   const liquidity = (liq >= 100_000 ? 12 : liq >= 50_000 ? 10 : 7) + (liq / mcap >= 0.1 ? 8 : 5);
   const momentum = (flow >= 1.5 ? 8 : flow >= 1.2 ? 6 : flow >= 1 ? 4 : 1) + (read.structure === 'up' ? 7 : read.structure === 'range' ? 3 : 0) + (read.aboveVwap ? 5 : 0);
   // A tracked smart wallet still holding it is social proof that cannot be bought with a boost.
@@ -785,8 +804,8 @@ export const ScannerService = {
       }
       const candles = memo.candles;
       const chartAgeMs = Date.now() - memo.at;
-      if (candles.length < 24) {
-        signals.push({ ...signalFor(pair, 'rejected', 'Under 2 hours of candles'), gates });
+      if (candles.length < MIN_CANDLES_5M) {
+        signals.push({ ...signalFor(pair, 'rejected', 'Under 90 minutes of candles'), gates });
         return;
       }
       const read = readChart(candles, maxStop, opts.mode);
@@ -805,9 +824,9 @@ export const ScannerService = {
       // Sell before a nearby 4h high instead of through it (breakouts are already above theirs).
       if (levels.setup !== 'breakout' && levels.setup !== 'momentum' && read.high4h > entry && read.high4h < target) {
         target = read.high4h * 0.98;
-        if (target < entry * 1.1 && status === 'ready') {
+        if (target < entry * (1 + MIN_ROOM_UNDER_HIGH) && status === 'ready') {
           status = 'watch';
-          reason = `${reason}, but the 4h high ${px(read.high4h)} leaves under +10%`;
+          reason = `${reason}, but the 4h high ${px(read.high4h)} leaves under +${Math.round(MIN_ROOM_UNDER_HIGH * 100)}%`;
         }
       }
       const minScore = minEntryScore(opts.mode);

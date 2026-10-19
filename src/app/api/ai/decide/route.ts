@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/rate-limit';
-import Anthropic from '@anthropic-ai/sdk';
 import {
   AI_MODEL,
   ENTRY_RULES_PROMPT,
+  GATE_MAX_TOKENS,
+  aiErrorNote,
+  isPermanentAiError,
   TRADING_SYSTEM_PROMPT,
   describeCoin,
   extractText,
@@ -19,7 +21,9 @@ import type { AiDecision, BotSettings } from '@/types/bot';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
+export const maxDuration = 60;
+/** One Claude attempt that ends well before the 60 s function limit. */
+const GATE_TIMEOUT_MS = 40_000;
 
 /** GET /api/ai/decide -> whether the server has a Claude key, and its default model. */
 export async function GET() {
@@ -57,12 +61,7 @@ const clampInt = (v: unknown, lo: number, hi: number): number | undefined => {
   return Number.isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : undefined;
 };
 
-function errorNote(error: unknown): string {
-  if (error instanceof Anthropic.AuthenticationError) return 'Invalid ANTHROPIC_API_KEY';
-  if (error instanceof Anthropic.RateLimitError) return 'Anthropic rate limit hit';
-  if (error instanceof Anthropic.APIError) return `Anthropic API error ${error.status}: ${error.message}`;
-  return (error as Error)?.message || 'AI decision failed';
-}
+const errorNote = aiErrorNote;
 
 /**
  * POST /api/ai/decide
@@ -104,7 +103,9 @@ export async function POST(req: NextRequest) {
     const response = await client.messages.create(
       {
         model,
-        max_tokens: 1024,
+        // Thinking is always on and counts toward max_tokens; 1024 left no room for the JSON, so
+        // most answers came back empty and every token was skipped as "unparseable".
+        max_tokens: GATE_MAX_TOKENS,
         system: TRADING_SYSTEM_PROMPT,
         output_config: { effort: 'low', format: { type: 'json_schema', schema: DECISION_SCHEMA } },
         messages: [
@@ -124,11 +125,14 @@ Return the JSON decision. Suggest take_profit_percent / stop_loss_percent that f
           },
         ],
       },
-      { timeout: 20_000 }
+      { timeout: GATE_TIMEOUT_MS, maxRetries: 0 }
     );
 
     if (response.stop_reason === 'refusal') {
       return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: 'AI declined' });
+    }
+    if (response.stop_reason === 'max_tokens') {
+      return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: 'AI answer cut off' });
     }
 
     const parsed = parseJsonObject<Parsed>(extractText(response));
@@ -157,6 +161,7 @@ async function decideSignal(signal: Record<string, unknown>, settings: Partial<B
   if (!hasAnthropicCredentials()) {
     return NextResponse.json({
       available: false,
+      configured: false,
       decision: { action: 'skip', confidence: 0, reason: 'No ANTHROPIC_API_KEY on the server', source: 'heuristic' } satisfies AiDecision,
     });
   }
@@ -166,7 +171,7 @@ async function decideSignal(signal: Record<string, unknown>, settings: Partial<B
     const response = await client.messages.create(
       {
         model,
-        max_tokens: 1024,
+        max_tokens: GATE_MAX_TOKENS,
         system: [
           { type: 'text', text: TRADING_SYSTEM_PROMPT },
           { type: 'text', text: ENTRY_RULES_PROMPT, cache_control: { type: 'ephemeral' } },
@@ -176,6 +181,8 @@ async function decideSignal(signal: Record<string, unknown>, settings: Partial<B
           {
             role: 'user',
             content: `The setup scanner has a Ready signal and the auto-buy is about to fire. Review it against the entry procedure and decide BUY or SKIP.
+
+The scanner has already enforced every hard gate (contract authorities, holder count and concentration, insiders, dev bag, liquidity, clone ticker, parabolic move) and passed a real Jupiter buy + sell-back quote; it also computed the stop, the target and the reward/risk after fees. Do not re-check those gates or skip for data that is not in the signal - missing extras are normal. BUY when the setup is valid and nothing in the numbers contradicts it. SKIP only for a specific red flag you can name from this data, for example: the last 5 minutes are clearly sell-dominated (buys5m/sells5m under ~0.8), price already left the entry zone, the net reward/risk is under 1, or the account is over-exposed. Calibrate confidence honestly: 50 means even odds of hitting the target before the stop, which with reward above risk is already positive expected value; 60-75 for a clean setup with supportive flow.
 
 Account: ${settings.paperTrading ? 'paper trading' : 'LIVE - real money'}, buy size $${settings.buyAmountUsd ?? 0}, trading capital ${context?.capitalUsd != null ? `$${context.capitalUsd}` : 'n/a'}, open positions ${context?.openPositions ?? 'n/a'}/${settings.maxPositions ?? 'n/a'}, today's realized P&L $${context?.todayPnlUsd ?? 0}, daily loss limit $${settings.dailyLossLimitUsd ?? 0}, profit lock +${settings.profitLockTriggerPercent ?? 0}% -> +${settings.profitLockPercent ?? 0}%.
 Recent performance: ${JSON.stringify(context?.stats ?? {})}
@@ -187,21 +194,26 @@ Return the JSON decision. stop_loss_percent must be <= the scanner's slPercent (
           },
         ],
       },
-      { timeout: 20_000 }
+      { timeout: GATE_TIMEOUT_MS, maxRetries: 0 }
     );
 
     if (response.stop_reason === 'refusal') {
       return NextResponse.json({ available: true, decision: { action: 'skip', confidence: 0, reason: 'AI declined to review this token', source: 'ai', model: response.model } satisfies AiDecision });
     }
-    const parsed = parseJsonObject<Parsed>(extractText(response));
+    // A cut-off or unreadable answer is not a verdict on the token: report it as unavailable so the
+    // signal is not put on the skip cooldown.
+    const parsed = response.stop_reason === 'max_tokens' ? null : parseJsonObject<Parsed>(extractText(response));
     if (!parsed) {
-      return NextResponse.json({ available: true, decision: { action: 'skip', confidence: 0, reason: 'Unparseable AI output', source: 'ai', model: response.model } satisfies AiDecision });
+      const note = response.stop_reason === 'max_tokens' ? 'AI answer cut off (token limit)' : 'Unparseable AI output';
+      return NextResponse.json({ available: false, note, decision: { action: 'skip', confidence: 0, reason: note, source: 'ai', model: response.model } satisfies AiDecision });
     }
     return NextResponse.json({ available: true, decision: toDecision(parsed, 'High', response.model) });
   } catch (error) {
     // A transport or quota problem is not a verdict on the token: report it as unavailable.
+    // `permanent`: a bad key, a model the key cannot use - retrying will not help until it is fixed.
     return NextResponse.json({
       available: false,
+      permanent: isPermanentAiError(error),
       note: errorNote(error),
       decision: { action: 'skip', confidence: 0, reason: errorNote(error), source: 'heuristic' } satisfies AiDecision,
     });
