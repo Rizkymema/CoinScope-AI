@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Bot, Globe, Key, SlidersHorizontal, TrendingUp, X } from 'lucide-react';
+import { Activity, Bot, Globe, Key, LogOut, SlidersHorizontal, TrendingUp, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SearchPanel } from '@/components/SearchPanel';
@@ -60,6 +60,28 @@ export default function DashboardPage() {
   const setIsLoginOpen = setWalletDialogOpen;
   const readyCount = useScannerStore((s) => s.readyIds.length);
   const autoTradeOn = settings.scannerAutoBuy;
+  const [sessionUser, setSessionUser] = useState<string | null>(null);
+  const [defaultPassword, setDefaultPassword] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/auth/session')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        setSessionUser(d?.user || null);
+        setDefaultPassword(!!d?.defaultPassword);
+      })
+      .catch(() => {});
+  }, []);
+
+  const logout = async () => {
+    // The engine runs in this tab and its API calls need the session: say what stops.
+    if ((autoTradeOn || isSniperActive || positionsCount > 0) && !window.confirm('Logging out stops auto trade, the sniper and the exits of open positions in this tab. Log out anyway?')) return;
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      window.location.replace('/login');
+    }
+  };
 
   // Entries, exits and MCP commands run in this tab: keep it awake (screen, and an inaudible tone so
   // the browser does not throttle or freeze it when hidden) and warn before closing it. Live mode
@@ -178,6 +200,26 @@ export default function DashboardPage() {
                   <span>Connect</span>
                 </>
               )}
+            </button>
+
+            {defaultPassword && (
+              <span
+                className="chip chip-warn hidden md:inline-flex"
+                title="The login still uses the built-in default password, which anyone can find in the public repository. Set COINSCOPE_LOGIN_PASSWORD on the server."
+              >
+                Default password
+              </span>
+            )}
+
+            <button
+              type="button"
+              onClick={logout}
+              className="btn btn-ghost px-2.5"
+              title={sessionUser ? `Signed in as ${sessionUser} - log out` : 'Log out'}
+              aria-label="Log out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              {sessionUser && <span className="hidden xl:inline">{sessionUser}</span>}
             </button>
           </div>
         </div>

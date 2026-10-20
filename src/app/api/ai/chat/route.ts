@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
-import { TRADING_SYSTEM_PROMPT, getAnthropic, hasAnthropicCredentials, modelFor } from '@/lib/ai-server';
+import { CHAT_MAX_TOKENS, TRADING_SYSTEM_PROMPT, aiErrorNote, getAnthropic, hasAnthropicCredentials, modelFor } from '@/lib/ai-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
+/** Ends the Claude call before Vercel's 60 s limit, so a slow answer still returns JSON. */
+const CHAT_TIMEOUT_MS = 52_000;
 
 /**
  * Chat endpoint with bot-control tools.
@@ -34,6 +36,16 @@ const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
         chain: { type: 'string', description: "Filter by chain id, e.g. 'solana', 'base', 'ethereum'." },
         pumpfun_only: { type: 'boolean', description: 'Only Pump.fun launches.' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_scanner_signals',
+    description:
+      'Latest result of the Auto Trade setup scanner: Ready signals (setup confirmed, safety gates passed, sell-back tested) with entry zone, stop, target, score and net reward/risk; Watch signals with what they wait for; and the most common rejection reasons. Use it for "what can I enter now?" questions - snipe_token accepts these symbols or mints and then uses the signal\'s own stop and target.',
+    input_schema: {
+      type: 'object',
+      properties: { include_watch: { type: 'boolean', description: 'Also list Watch signals (default true).' } },
       additionalProperties: false,
     },
   },
@@ -180,7 +192,8 @@ const CONTROL_PROMPT = `${TRADING_SYSTEM_PROMPT}
 
 ## Operating the bot (tools)
 You are also the user's trading desk: you read live state and execute through tools.
-- Always call tools before answering questions about coins, positions, balances or settings; never guess numbers. get_new_coins for launches, get_positions / get_trade_history for the book, get_bot_status for configuration.
+- Always call tools before answering questions about coins, positions, balances or settings; never guess numbers. get_scanner_signals for what is ready to enter now, get_new_coins for launches, get_positions / get_trade_history for the book, get_bot_status for configuration.
+- When the user asks what to buy, start from get_scanner_signals: Ready signals already passed the safety gates and the sell-back test and carry a stop and target whose reward beats the risk after fees. Buying one with snipe_token keeps those levels. No setup can guarantee a profit; say so plainly when asked, and explain the stop and target instead.
 - When asked to trade, change strategy, or start/stop the bot, do it with the tools, then report exactly what happened: fills, amounts, tx signatures, rejections and errors. Never claim a trade executed unless the tool result says success.
 - When asked for a recommendation, deliver a professional desk note: (1) verdict, (2) key metrics, (3) risk grade and what could go wrong, (4) concrete plan - size, TP/SL, invalidation, (5) what you would monitor next. Offer to execute the plan; execute immediately only when the user has asked for action.
 - Manage the portfolio like a risk manager: flag over-exposure (too many open positions, oversized buys vs. balance), stale positions with fading flow, positions near TP/SL, and settings that are inconsistent (e.g. tight SL on illiquid curve tokens, 0 minimum liquidity, AI gate off in live mode). Suggest specific corrections with numbers.
@@ -211,18 +224,32 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = getAnthropic();
-    const response = await client.beta.messages.create({
-      model,
-      max_tokens: 4096,
-      betas: ['thinking-binding-controls-2026-08-01'],
-      // A history that still breaks the binding (a tab from before this fix, a model switch) loses
-      // the affected thinking blocks instead of failing the whole turn with a 400.
-      thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
-      system: [{ type: 'text', text: CONTROL_PROMPT, cache_control: { type: 'ephemeral' } }],
-      tools: BOT_TOOLS,
-      output_config: { effort: 'high' },
-      messages,
-    });
+    const response = await client.beta.messages.create(
+      {
+        model,
+        // Thinking is always on for these models and counts toward max_tokens: 4096 at high effort
+        // could be spent entirely on thinking and come back with no answer at all.
+        max_tokens: CHAT_MAX_TOKENS,
+        betas: ['thinking-binding-controls-2026-08-01'],
+        // A history that still breaks the binding (a tab from before this fix, a model switch) loses
+        // the affected thinking blocks instead of failing the whole turn with a 400.
+        thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
+        system: [{ type: 'text', text: CONTROL_PROMPT, cache_control: { type: 'ephemeral' } }],
+        tools: BOT_TOOLS,
+        // 'high' regularly ran past the 60 s function limit on Vercel, which answers with an HTML 504
+        // page instead of JSON - the "AI error" in the chat. 'medium' answers well inside it.
+        output_config: { effort: 'medium' },
+        messages,
+      },
+      // One attempt that ends before the platform kills the function, so the client always gets JSON.
+      { timeout: CHAT_TIMEOUT_MS, maxRetries: 0 }
+    );
+
+    // Cut off by max_tokens: a trailing tool_use may hold half its input, and running a trade tool
+    // on half an input is worse than asking again.
+    if (response.stop_reason === 'max_tokens') {
+      return NextResponse.json({ error: 'The AI answer was cut off (token limit). Ask again with a shorter or more specific instruction.' }, { status: 502 });
+    }
 
     return NextResponse.json({
       content: response.content,
@@ -232,15 +259,14 @@ export async function POST(req: NextRequest) {
       usage: response.usage,
     });
   } catch (error) {
-    if (error instanceof Anthropic.AuthenticationError) {
-      return NextResponse.json({ error: 'Invalid ANTHROPIC_API_KEY' }, { status: 401 });
-    }
-    if (error instanceof Anthropic.RateLimitError) {
-      return NextResponse.json({ error: 'Anthropic rate limit reached, try again shortly.' }, { status: 429 });
-    }
-    if (error instanceof Anthropic.APIError) {
-      return NextResponse.json({ error: `Anthropic API error ${error.status}: ${error.message}` }, { status: 502 });
-    }
-    return NextResponse.json({ error: (error as Error)?.message || 'AI chat failed' }, { status: 500 });
+    const status =
+      error instanceof Anthropic.APIConnectionTimeoutError
+        ? 504
+        : error instanceof Anthropic.RateLimitError
+        ? 429
+        : error instanceof Anthropic.APIError
+        ? 502
+        : 500;
+    return NextResponse.json({ error: aiErrorNote(error) }, { status });
   }
 }

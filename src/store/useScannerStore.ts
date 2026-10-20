@@ -85,7 +85,15 @@ function notify(signal: ScanSignal) {
 
 /* ------------------------------------------------------------------ auto-buy */
 
+/** After a buy, the same token is not bought again for an hour. */
 const AUTO_BUY_COOLDOWN_MS = 60 * 60_000;
+/**
+ * After Claude skips a token it is asked again only after this long. It was the full hour, which
+ * kept a token out even after its setup had changed (a watch turning into a fresh retest).
+ */
+const AI_SKIP_COOLDOWN_MS = 20 * 60_000;
+/** Mints whose last auto-buy attempt was an AI skip, so the shorter cooldown applies. */
+const aiSkipped = new Set<string>();
 /**
  * Live auto-buys never put more than this share of the trading capital into one token (the
  * skill's micro-account rule: at most a third of the balance). Capital is the signing wallet plus,
@@ -95,6 +103,9 @@ const AUTO_BUY_MAX_CAPITAL_SHARE = 0.35;
 /** SOL the signing wallet must keep beyond the buy itself: token-account rent plus buy and sell fees. */
 const ENTRY_RESERVE_SOL = 0.005;
 const autoBuyAt = new Map<string, number>();
+let warnedNoAiKey = false;
+/** Last permanent AI-gate problem that was reported, so it is logged once rather than every scan. */
+let warnedAiProblem: string | null = null;
 const round1 = (v?: number) => Math.round((v ?? 0) * 10) / 10;
 
 /** Half size is only worth it when the smaller order still clears Solana's fixed costs comfortably. */
@@ -165,7 +176,7 @@ async function autoBuy(ready: ScanSignal[]) {
         (s.netRewardRisk ?? 0) >= 1 &&
         !held.has(s.id) &&
         !bot.pendingTradeIds.includes(s.coin.id) &&
-        Date.now() - (autoBuyAt.get(s.id) || 0) > AUTO_BUY_COOLDOWN_MS
+        Date.now() - (autoBuyAt.get(s.id) || 0) > (aiSkipped.has(s.id) ? AI_SKIP_COOLDOWN_MS : AUTO_BUY_COOLDOWN_MS)
     );
   if (!candidate) return;
 
@@ -213,28 +224,64 @@ async function autoBuy(ready: ScanSignal[]) {
       capitalUsd: capitalUsd === null ? null : Math.round(capitalUsd * 100) / 100,
     });
     if (!verdict || !verdict.available) {
-      // Not a verdict on the token: the signal stays eligible for the next scan.
-      bot.log('warning', `[AI GATE] No answer from Claude (${verdict?.reason || 'network error'}) - ${candidate.coin.symbol} not bought. Check the AI settings.`, { coinSymbol: candidate.coin.symbol });
-      return;
+      // Not a verdict on the token. The scanner already ran every hard gate and the sell-back test,
+      // so the signal is not thrown away:
+      //  - no Claude key on the server: the AI review cannot run at all, trade on the scanner's checks;
+      //  - a passing failure (timeout, overload) in paper mode: trade on the scanner's checks at half size;
+      //  - a passing failure in live mode: skip this scan, the signal is retried next minute.
+      const why = verdict?.reason || 'network error';
+      const notConfigured = verdict?.configured === false;
+      if (verdict?.permanent) {
+        // A bad key, a model the key cannot use or an expired login: hold entries, say it once.
+        if (warnedAiProblem !== why) {
+          warnedAiProblem = why;
+          bot.log('warning', `[AI GATE] ${why} - auto-buy is holding entries until this is fixed (or turn the AI review off).`);
+          useBotStore.setState({ latestToastNotification: { title: 'AI review is not working', description: why, type: 'error' } });
+        }
+        return;
+      }
+      warnedAiProblem = null;
+      if (!notConfigured && !settings.paperTrading) {
+        bot.log('warning', `[AI GATE] No answer from Claude (${why}) - ${candidate.coin.symbol} not bought yet, retried next scan.`, { coinSymbol: candidate.coin.symbol });
+        return;
+      }
+      if (notConfigured) {
+        if (!warnedNoAiKey) {
+          warnedNoAiKey = true;
+          bot.log('warning', '[AI GATE] No ANTHROPIC_API_KEY on the server: auto trade buys on the scanner checks alone until a key is set.');
+        }
+      } else {
+        if (settings.buyAmountUsd * 0.5 >= 1) amountUsd = Math.round(settings.buyAmountUsd * 50) / 100;
+        bot.log('warning', `[AI GATE] No answer from Claude (${why}) - paper entry on the scanner checks at half size.`, { coinSymbol: candidate.coin.symbol });
+      }
+      reason = `${reason}, scanner only`;
+    } else {
+      warnedAiProblem = null;
+      useBotStore.setState({
+        lastAiDecision: { action: verdict.action, confidence: verdict.confidence, reason: verdict.reason, riskLevel: verdict.riskLevel, source: verdict.source, model: verdict.model, symbol: candidate.coin.symbol, at: Date.now() },
+      });
+      const approved = verdict.action === 'buy' && verdict.confidence >= settings.aiMinConfidence;
+      bot.log('ai', `[AI ${verdict.model || 'claude'}] ${candidate.coin.symbol}: ${verdict.action.toUpperCase()} (${verdict.confidence}%) - ${verdict.reason}`, { coinSymbol: candidate.coin.symbol });
+      if (!approved) {
+        autoBuyAt.set(candidate.id, Date.now());
+        aiSkipped.add(candidate.id);
+        return;
+      }
+      if (settings.aiAdjustTargets) {
+        if (verdict.suggestedStopLossPercent) sl = round1(Math.max(4, Math.min(sl, verdict.suggestedStopLossPercent)));
+        if (verdict.suggestedTakeProfitPercent) tp = round1(Math.max(tp * 0.8, Math.min(tp * 1.5, verdict.suggestedTakeProfitPercent)));
+        // Whatever Claude suggests, the target must still clear the round-trip cost with reward
+        // above risk - otherwise a take-profit hit could still lose money after fees.
+        const cost = candidate.costPercent ?? 0;
+        tp = round1(Math.max(tp, sl + 2 * cost, cost + 4));
+      }
+      if (verdict.sizeFactor === 0.5 && settings.buyAmountUsd * 0.5 >= MIN_HALF_SIZE_USD) amountUsd = Math.round(settings.buyAmountUsd * 0.5);
+      reason = `${reason}, AI ${verdict.confidence}%`;
     }
-    useBotStore.setState({
-      lastAiDecision: { action: verdict.action, confidence: verdict.confidence, reason: verdict.reason, riskLevel: verdict.riskLevel, source: verdict.source, model: verdict.model, symbol: candidate.coin.symbol, at: Date.now() },
-    });
-    const approved = verdict.action === 'buy' && verdict.confidence >= settings.aiMinConfidence;
-    bot.log('ai', `[AI ${verdict.model || 'claude'}] ${candidate.coin.symbol}: ${verdict.action.toUpperCase()} (${verdict.confidence}%) - ${verdict.reason}`, { coinSymbol: candidate.coin.symbol });
-    if (!approved) {
-      autoBuyAt.set(candidate.id, Date.now());
-      return;
-    }
-    if (settings.aiAdjustTargets) {
-      if (verdict.suggestedStopLossPercent) sl = round1(Math.max(4, Math.min(sl, verdict.suggestedStopLossPercent)));
-      if (verdict.suggestedTakeProfitPercent) tp = round1(Math.max(tp * 0.8, Math.min(tp * 1.5, verdict.suggestedTakeProfitPercent)));
-    }
-    if (verdict.sizeFactor === 0.5 && settings.buyAmountUsd * 0.5 >= MIN_HALF_SIZE_USD) amountUsd = Math.round(settings.buyAmountUsd * 0.5);
-    reason = `${reason}, AI ${verdict.confidence}%`;
   }
 
   autoBuyAt.set(candidate.id, Date.now());
+  aiSkipped.delete(candidate.id);
   let coin = candidate.coin;
   if (candidate.setup === 'launch') {
     // Claude's review takes seconds and a launch can move that fast: re-check before paying.

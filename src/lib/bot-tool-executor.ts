@@ -5,6 +5,9 @@
 import { useBotStore } from '../store/useBotStore';
 import { CoinData } from '../types/coin';
 import { BotPosition, BotSettings } from '../types/bot';
+// Type-only: the scanner store itself is imported lazily (it imports the bot store, which imports
+// the bridge, which imports this file).
+import type { ScanSignal } from '../services/scanner.service';
 
 const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'buyAmountUsd',
@@ -83,6 +86,35 @@ function positionSummary(p: BotPosition) {
   };
 }
 
+function signalSummary(s: ScanSignal) {
+  const r1 = (v?: number) => (v === undefined ? undefined : Math.round(v * 10) / 10);
+  return {
+    symbol: s.coin.symbol,
+    mint: s.id,
+    status: s.status,
+    setup: s.setup,
+    reason: s.reason,
+    score: s.score?.total,
+    priceUsd: s.priceUsd,
+    liquidityUsd: Math.round(s.liquidityUsd),
+    marketCapUsd: Math.round(s.marketCapUsd),
+    ageHours: r1(s.ageHours),
+    entryLow: s.entryLow,
+    entryHigh: s.entryHigh,
+    stopPrice: s.stopPrice,
+    targetPrice: s.targetPrice,
+    slPercent: r1(s.slPercent),
+    tpPercent: r1(s.tpPercent),
+    costPercent: r1(s.costPercent),
+    netRewardRisk: r1(s.netRewardRisk),
+    rsi: s.rsi !== undefined ? Math.round(s.rsi) : undefined,
+    buys5m: s.buys5m,
+    sells5m: s.sells5m,
+    holders: s.gates?.holders ?? s.launch?.holders,
+    invalidation: s.invalidation,
+  };
+}
+
 function findPosition(query: string): BotPosition | undefined {
   const q = String(query || '').trim().toLowerCase().replace(/^\$/, '');
   const { positions } = useBotStore.getState();
@@ -156,12 +188,56 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
         return ok({ updated: patch, settings: { ...rest, whitelistedSymbols, walletConnected: !!connectedWalletAddress } });
       }
 
+      case 'get_scanner_signals': {
+        const { useScannerStore } = await import('../store/useScannerStore');
+        const sc = useScannerStore.getState();
+        const includeWatch = input?.include_watch !== false;
+        const list = [...sc.signals, ...sc.launches].filter((s) => s.status === 'ready' || (includeWatch && s.status === 'watch'));
+        const rejectedBy = new Map<string, number>();
+        sc.signals
+          .filter((s) => s.status === 'rejected')
+          .forEach((s) => {
+            const key = s.reason.replace(/\$[\d.,]+[KM]?|\d+(\.\d+)?%|\$0\.[\d{}]+/g, '#');
+            rejectedBy.set(key, (rejectedBy.get(key) || 0) + 1);
+          });
+        return ok({
+          scannerOn: sc.enabled,
+          lastScanAt: sc.lastScanAt ? new Date(sc.lastScanAt).toISOString() : null,
+          candidates: sc.candidateCount,
+          error: sc.error,
+          signals: list.slice(0, 20).map(signalSummary),
+          topRejections: [...rejectedBy.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([reason, count]) => ({ reason, count })),
+        });
+      }
+
       case 'snipe_token': {
-        const coin = store.findCoin(String(input?.token || ''));
-        if (!coin) return fail(`Token "${input?.token}" not found in the scanner. Use get_new_coins to list available tokens.`);
+        const query = String(input?.token || '');
+        let coin = store.findCoin(query);
+        // Scanner signals carry their own stop and target; a buy of one keeps them unless overridden.
+        let signalTargets: { tp: number; sl: number } | undefined;
+        if (!coin || !input?.takeProfitPercent || !input?.stopLossPercent) {
+          const { useScannerStore } = await import('../store/useScannerStore');
+          const sc = useScannerStore.getState();
+          const q = query.trim().toLowerCase().replace(/^\$/, '');
+          const live = [...sc.signals, ...sc.launches].filter((s) => s.status !== 'rejected');
+          // A coin already found is matched by its own mint / id, never by ticker: two tokens can
+          // share a symbol, and one must not be bought with the other's stop and target.
+          const found = coin;
+          const match = found
+            ? live.find((s) => s.coin.id === found.id || (!!found.mint && s.id === found.mint))
+            : live.find((s) => s.id.toLowerCase() === q || s.coin.id.toLowerCase() === q || s.coin.symbol.toLowerCase() === q);
+          if (match) {
+            coin = coin || match.coin;
+            if (match.tpPercent && match.slPercent) signalTargets = { tp: Math.round(match.tpPercent * 10) / 10, sl: Math.round(match.slPercent * 10) / 10 };
+          }
+        }
+        if (!coin) return fail(`Token "${input?.token}" not found. Use get_scanner_signals or get_new_coins to list available tokens.`);
         const tp = Number(input?.takeProfitPercent) || 0;
         const sl = Number(input?.stopLossPercent) || 0;
-        const targets = tp > 0 || sl > 0 ? { tp: tp > 0 ? tp : store.settings.takeProfitPercent, sl: sl > 0 ? sl : store.settings.stopLossPercent } : undefined;
+        const targets =
+          tp > 0 || sl > 0
+            ? { tp: tp > 0 ? tp : signalTargets?.tp ?? store.settings.takeProfitPercent, sl: sl > 0 ? sl : signalTargets?.sl ?? store.settings.stopLossPercent }
+            : signalTargets;
         const res = await store.manualSnipeCoin(coin, input?.amountUsd ? Number(input.amountUsd) : undefined, `AI: ${input?.reason || 'manual via chat'}`, targets);
         const pos = useBotStore.getState().positions.find((p) => p.coin.id === coin.id);
         return res.success ? ok({ ...res, position: pos ? positionSummary(pos) : null }) : fail(res.message);

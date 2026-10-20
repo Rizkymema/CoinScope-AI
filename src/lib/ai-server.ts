@@ -24,6 +24,40 @@ export function getAnthropic(): Anthropic {
   return client;
 }
 
+/**
+ * Thinking is always on for the Claude 5.x models and its tokens count toward `max_tokens`, so a
+ * small budget can be spent entirely on thinking and leave no JSON or text behind. These budgets
+ * leave room for both.
+ */
+export const GATE_MAX_TOKENS = 4096;
+export const ANALYZE_MAX_TOKENS = 6144;
+export const CHAT_MAX_TOKENS = 8192;
+
+/** Readable, user-facing reason for a failed Claude call. */
+export function aiErrorNote(error: unknown): string {
+  if (error instanceof Anthropic.APIConnectionTimeoutError) return 'Claude took too long to answer (timeout) - try again or pick a faster model in Settings';
+  if (error instanceof Anthropic.AuthenticationError) return 'Invalid ANTHROPIC_API_KEY';
+  if (error instanceof Anthropic.PermissionDeniedError) return 'This API key has no access to the selected model - pick another model in Settings';
+  if (error instanceof Anthropic.NotFoundError) return 'Model not found for this API key - pick another model in Settings';
+  if (error instanceof Anthropic.RateLimitError) return 'Anthropic rate limit reached, try again shortly';
+  if (error instanceof Anthropic.APIConnectionError) return 'Could not reach the Anthropic API (network error)';
+  if (error instanceof Anthropic.APIError) {
+    if (error.status === 529) return 'Anthropic is overloaded right now, try again shortly';
+    return `Anthropic API error ${error.status}: ${error.message}`;
+  }
+  return (error as Error)?.message || 'AI request failed';
+}
+
+/** Errors that repeat on every call until the configuration is fixed (key, model access). */
+export function isPermanentAiError(error: unknown): boolean {
+  return (
+    error instanceof Anthropic.AuthenticationError ||
+    error instanceof Anthropic.PermissionDeniedError ||
+    error instanceof Anthropic.NotFoundError ||
+    (error instanceof Anthropic.BadRequestError && /model/i.test(error.message))
+  );
+}
+
 export function extractText(message: Anthropic.Message): string {
   return message.content
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')

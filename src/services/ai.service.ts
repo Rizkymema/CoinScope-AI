@@ -49,6 +49,15 @@ export interface ChatTurnResult {
   model?: string;
 }
 
+/** What a non-JSON failure means for the user (Vercel answers timeouts and crashes with HTML pages). */
+function statusNote(status: number): string {
+  if (status === 401) return 'Login session expired - reload the page and log in again.';
+  if (status === 504) return 'The AI server timed out (the hosting limit is 60 s). Try again, or pick a faster model (Sonnet / Haiku) in Settings.';
+  if (status === 413) return 'The request was too large. Start a new chat and try again.';
+  if (status >= 500) return `The AI server failed (HTTP ${status}). Try again in a moment.`;
+  return `AI request failed (HTTP ${status})`;
+}
+
 async function postJson<T>(url: string, body: unknown, timeoutMs = 30_000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -59,9 +68,17 @@ async function postJson<T>(url: string, body: unknown, timeoutMs = 30_000): Prom
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `${url} failed (${res.status})`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      // The rate limiter and the login check answer { error: code, message }; the AI routes answer { error }.
+      throw new Error(data?.message || data?.error || statusNote(res.status));
+    }
+    if (!data) throw new Error(statusNote(res.status));
     return data as T;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error(`No answer from the AI within ${Math.round(timeoutMs / 1000)} s. Try again.`);
+    if (err instanceof TypeError) throw new Error('Network error - check your internet connection.');
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -70,7 +87,7 @@ async function postJson<T>(url: string, body: unknown, timeoutMs = 30_000): Prom
 export const AIService = {
   /** Full scorecard for a coin. Uses Claude when the server has credentials, heuristics otherwise. */
   async analyzeCoin(coin: CoinData, model?: string): Promise<CoinAnalysis & { source?: 'ai' | 'heuristic'; note?: string }> {
-    const data = await postJson<{ analysis: CoinAnalysis; source?: 'ai' | 'heuristic'; note?: string }>('/api/ai/analyze', { coin, model }, 45_000);
+    const data = await postJson<{ analysis: CoinAnalysis; source?: 'ai' | 'heuristic'; note?: string }>('/api/ai/analyze', { coin, model }, 58_000);
     return { ...data.analysis, source: data.source, note: data.note };
   },
 
@@ -81,7 +98,7 @@ export const AIService = {
     context: { openPositions: number; stats: BotStats }
   ): Promise<AiDecision> {
     try {
-      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context, model: settings.aiModel }, 25_000);
+      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context, model: settings.aiModel }, 50_000);
       if (data?.note && data.decision) data.decision.reason = `${data.decision.reason} (${data.note})`;
       return data.decision;
     } catch (err: any) {
@@ -102,25 +119,27 @@ export const AIService = {
     signal: SignalForGate,
     settings: BotSettings,
     context: { openPositions: number; stats: BotStats; todayPnlUsd: number; capitalUsd: number | null }
-  ): Promise<(AiDecision & { sizeFactor?: number; available: boolean }) | null> {
+  ): Promise<(AiDecision & { sizeFactor?: number; available: boolean; configured?: boolean; permanent?: boolean }) | null> {
     try {
-      const data = await postJson<{ decision: AiDecision & { sizeFactor?: number }; note?: string; available?: boolean }>(
+      const data = await postJson<{ decision: AiDecision & { sizeFactor?: number }; note?: string; available?: boolean; configured?: boolean; permanent?: boolean }>(
         '/api/ai/decide',
         { signal, settings, context, model: settings.aiModel },
-        25_000
+        50_000
       );
       if (!data?.decision) return null;
-      if (data.note) data.decision.reason = `${data.decision.reason} (${data.note})`;
-      return { ...data.decision, available: data.available !== false };
-    } catch {
-      return null;
+      if (data.note && data.decision.reason !== data.note) data.decision.reason = `${data.decision.reason} (${data.note})`;
+      return { ...data.decision, available: data.available !== false, configured: data.configured !== false, permanent: !!data.permanent };
+    } catch (err: any) {
+      const reason = err?.message || 'network error';
+      // An expired login is not a passing failure either: nothing gets through until the user logs in.
+      return { action: 'skip', confidence: 0, reason, source: 'heuristic', available: false, permanent: /log in again/i.test(reason) };
     }
   },
 
   /** One model turn of the control chat. The caller executes any tool_use blocks and calls again. */
   async chatTurn(messages: ChatMessageParam[], model?: string): Promise<ChatTurnResult> {
     try {
-      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, model }, 90_000);
+      const data = await postJson<ChatTurnResult>('/api/ai/chat', { messages, model }, 75_000);
       return data;
     } catch (err: any) {
       return { content: [], stop_reason: null, error: err?.message || 'AI chat failed' };

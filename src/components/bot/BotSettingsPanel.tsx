@@ -324,7 +324,7 @@ export const BotSettingsPanel: React.FC = () => {
             </p>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Profit lock at +%" hint="Once a position is up this much, its stop moves above cost. 0 turns it off.">
+              <Field label="Profit lock at +%" hint="Once a position is up this much (or half way to its own target if sooner, not under +8% unless set lower), its stop moves above cost. 0 turns it off.">
                 <input
                   type="number"
                   min={0}
