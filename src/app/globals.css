@@ -504,6 +504,30 @@
   animation: row-flash 1.6s var(--ease) forwards;
 }
 
+/* Price marks: one short tint when a value changes (Auto Trade desk). Never loops. */
+@keyframes tick-up {
+  from {
+    background-color: rgba(52, 211, 153, 0.22);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@keyframes tick-down {
+  from {
+    background-color: rgba(248, 113, 113, 0.22);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.tick-up {
+  animation: tick-up 600ms var(--ease) 1;
+}
+.tick-down {
+  animation: tick-down 600ms var(--ease) 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -8,7 +8,6 @@ import {
   BotSettings,
   BotStats,
   BotTradeHistory,
-  StrategyPreset,
   LiveSignerKind,
   TokenTradeEvent,
 } from '../types/bot';
@@ -19,13 +18,13 @@ import { WalletService, WalletProviderType, DEFAULT_SOLANA_RPC, RPC_PROXY, resol
 import { TradeService, DryRunResult, LiveSigner, TOKEN_ACCOUNT_RENT_SOL } from '../services/trade.service';
 import { HotWallet } from '../services/hotwallet.service';
 import { PaperFillService } from '../services/paperfill.service';
-import { AIService } from '../services/ai.service';
 import { SolPriceService } from '../services/solprice.service';
 import { CoinService } from '../services/coin.service';
 import { recordTradeForChart } from '../services/chart.service';
 import { PumpFunService } from '../services/pumpfun.service';
 import { BridgeService } from '../services/bridge.service';
 import { DEFAULT_AI_MODEL, resolveAiModel } from '../lib/ai-models';
+import { recordPriceTrail } from '../lib/price-trail';
 
 type ExitReason = BotTradeHistory['exitReason'];
 
@@ -37,7 +36,6 @@ export interface BotToast {
 }
 
 interface BotState {
-  isActive: boolean;
   settings: BotSettings;
   /** Virtual USD balance used in paper-trading mode. */
   walletBalance: number;
@@ -46,7 +44,6 @@ interface BotState {
   logs: BotLogEntry[];
   /** Newest coins seen by the scanner (stream + feed), newest first. */
   recentCoins: CoinData[];
-  processedCoinIds: string[];
   pendingTradeIds: string[];
   isWsConnected: boolean;
   wsLatencyMs: number;
@@ -56,24 +53,16 @@ interface BotState {
   lastAiDecision: (AiDecision & { symbol: string; at: number }) | null;
   lastDryRun: (DryRunResult & { symbol: string; at: number }) | null;
   isDryRunning: boolean;
-  /** Why candidates were rejected, newest first. Powers the "nothing is trading" hint. */
-  skipReasons: { reason: string; at: number }[];
-  evaluatedCount: number;
   /** In-browser bot wallet (address is public; `unlocked` means it can sign right now). */
   botWallet: { address: string | null; unlocked: boolean; solBalance: number | null; backedUp: boolean };
   walletDialogOpen: boolean;
 
   // lifecycle
   boot: () => void;
-  toggleBot: (active?: boolean) => void;
   updateSettings: (newSettings: Partial<BotSettings>) => void;
-  applyPreset: (preset: Exclude<StrategyPreset, 'custom'>) => void;
-  /** Most common rejection reason in the recent window, for the empty-state hint. */
-  getTopSkipReason: () => { reason: string; count: number; total: number } | null;
 
-  // scanner + execution
+  // feed + execution
   ingestCoins: (coins: CoinData[], origin?: 'stream' | 'feed') => void;
-  processIncomingCoins: (coins: CoinData[]) => Promise<void>;
   /** `targets` overrides the settings' TP / SL percentages for this one position (scanner signals). */
   manualSnipeCoin: (
     coin: CoinData,
@@ -100,7 +89,7 @@ interface BotState {
   /** Realized P&L since local midnight for the current execution mode. */
   getTodayRealizedPnl: () => number;
 
-  // targets
+  // watchlist (Market tab; has no effect on trading)
   addTargetSymbol: (symbol: string) => void;
   removeTargetSymbol: (symbol: string) => void;
 
@@ -113,73 +102,8 @@ interface BotState {
   getSnapshot: () => Record<string, unknown>;
 }
 
-/**
- * Risk presets. The filters below decide how often the bot can trade at all, so the choice
- * belongs to the user rather than being buried in defaults.
- *
- * Reference point measured from the live stream: a typical fresh Pump.fun mint holds
- * $0-$150 of liquidity in its first minute, and only a small share ever passes $1,000.
- */
-export const STRATEGY_PRESETS: Record<Exclude<StrategyPreset, 'custom'>, Partial<BotSettings> & { label: string; blurb: string }> = {
-  conservative: {
-    label: 'Conservative',
-    blurb: 'Waits for a filled curve and real depth. Trades rarely.',
-    minLiquidityUsd: 5_000,
-    minBondingCurvePercent: 40,
-    maxTokenAgeMinutes: 1_440,
-    aiMinConfidence: 45,
-    takeProfitPercent: 40,
-    stopLossPercent: 20,
-    trailingStopPercent: 15,
-    maxPositions: 3,
-  },
-  balanced: {
-    label: 'Balanced',
-    blurb: 'Needs some money in the pool before entering. A few trades an hour.',
-    minLiquidityUsd: 500,
-    minBondingCurvePercent: 0,
-    maxTokenAgeMinutes: 120,
-    aiMinConfidence: 45,
-    takeProfitPercent: 60,
-    stopLossPercent: 25,
-    trailingStopPercent: 0,
-    maxPositions: 5,
-  },
-  aggressive: {
-    label: 'Aggressive',
-    blurb: 'Buys very early with almost no depth. Expect most entries to fail.',
-    minLiquidityUsd: 150,
-    minBondingCurvePercent: 0,
-    maxTokenAgeMinutes: 120,
-    aiMinConfidence: 35,
-    takeProfitPercent: 100,
-    stopLossPercent: 35,
-    trailingStopPercent: 0,
-    maxPositions: 8,
-  },
-};
-
-/** Fields that define a preset - editing any of them flips the preset to 'custom'. */
-const PRESET_FIELDS: (keyof BotSettings)[] = [
-  'minLiquidityUsd',
-  'minBondingCurvePercent',
-  'maxTokenAgeMinutes',
-  'aiMinConfidence',
-  'takeProfitPercent',
-  'stopLossPercent',
-  'trailingStopPercent',
-  'maxPositions',
-];
-
 const DEFAULT_SETTINGS: BotSettings = {
   buyAmountUsd: 25,
-  minLiquidityUsd: 500,
-  maxRiskLevel: 'High',
-  minAiScore: 60,
-  targetChain: 'all',
-  launchPlatform: 'all',
-  scanSpeed: 'websocket',
-  minBondingCurvePercent: 0,
   takeProfitPercent: 60,
   stopLossPercent: 25,
   trailingStopPercent: 0,
@@ -189,7 +113,6 @@ const DEFAULT_SETTINGS: BotSettings = {
   maxPositions: 5,
   slippagePercent: 15,
   paperTrading: true,
-  maxTokenAgeMinutes: 120,
   soundAlerts: true,
   solanaRpcUrl: DEFAULT_SOLANA_RPC,
   priorityFeeSol: 0.0005,
@@ -197,13 +120,11 @@ const DEFAULT_SETTINGS: BotSettings = {
   connectedWalletAddress: null,
   solBalance: 0,
   walletType: null,
-  targetOnlyMode: false,
   whitelistedSymbols: [],
   aiGateEnabled: true,
   aiMinConfidence: 45,
   aiAdjustTargets: true,
   aiModel: DEFAULT_AI_MODEL,
-  preset: 'balanced',
   liveSigner: 'wallet',
   dailyLossLimitUsd: 100,
   scannerAutoBuy: false,
@@ -232,7 +153,6 @@ const WALLET_REFRESH_MS = 30_000;
 let booted = false;
 let pricePollTimer: ReturnType<typeof setInterval> | null = null;
 let walletTimer: ReturnType<typeof setInterval> | null = null;
-let snipeQueue: Promise<void> = Promise.resolve();
 
 const nowTime = () => new Date().toLocaleTimeString();
 const uid = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -258,7 +178,6 @@ function mergeCoin(prev: CoinData | undefined, next: CoinData): CoinData {
 export const useBotStore = create<BotState>()(
   persist(
     (set, get) => ({
-      isActive: false,
       settings: DEFAULT_SETTINGS,
       walletBalance: 1000,
       positions: [],
@@ -272,7 +191,6 @@ export const useBotStore = create<BotState>()(
         },
       ],
       recentCoins: [],
-      processedCoinIds: [],
       pendingTradeIds: [],
       isWsConnected: false,
       wsLatencyMs: 0,
@@ -282,8 +200,6 @@ export const useBotStore = create<BotState>()(
       lastAiDecision: null,
       lastDryRun: null,
       isDryRunning: false,
-      skipReasons: [],
-      evaluatedCount: 0,
       botWallet: { address: null, unlocked: false, solBalance: null, backedUp: false },
       walletDialogOpen: false,
 
@@ -329,6 +245,7 @@ export const useBotStore = create<BotState>()(
         // so it must be populated no matter which tab is open.
         wsService.connect();
         wsService.subscribeNewTokens();
+        wsService.subscribeMigrations();
 
         if (!pricePollTimer) {
           pricePollTimer = setInterval(() => {
@@ -373,46 +290,9 @@ export const useBotStore = create<BotState>()(
         BridgeService.start();
       },
 
-      toggleBot: (active) => {
-        const next = active !== undefined ? active : !get().isActive;
-        const { settings } = get();
-
-        if (next && !settings.paperTrading && !signerFor(settings.liveSigner)) {
-          const why = signerMissingMessage(settings.liveSigner);
-          get().log('warning', `Live mode cannot start: ${why}`);
-          set({ latestToastNotification: { title: 'Signer required', description: why, type: 'error' } });
-          return;
-        }
-        if (next && dailyLossReached()) {
-          const msg = `Daily loss limit reached ($${get().getTodayRealizedPnl().toFixed(2)} today, limit -$${settings.dailyLossLimitUsd}). Raise the limit in Settings or wait until tomorrow.`;
-          get().log('warning', msg);
-          set({ latestToastNotification: { title: 'Daily loss limit', description: msg, type: 'error' } });
-          return;
-        }
-
-        if (next) {
-          get().boot();
-          wsService.connect();
-          wsService.subscribeNewTokens();
-          wsService.subscribeMigrations();
-        }
-        // When pausing we keep the stream open: the New Coins feed and open positions still use it.
-
-        set({ isActive: next });
-        get().log(
-          'info',
-          next
-            ? `Auto-snipe bot STARTED (${settings.paperTrading ? 'paper trading' : `LIVE - real funds, signed by ${settings.liveSigner === 'bot' ? 'the bot wallet' : 'your wallet extension'}`}${settings.aiGateEnabled ? ', AI gate on' : ''}). Listening to Pump.fun stream + new DEX pools...`
-            : 'Auto-snipe bot PAUSED. Open positions are still monitored.'
-        );
-      },
-
       updateSettings: (newSettings) => {
         const prev = get().settings;
-        const touchesPreset = PRESET_FIELDS.some((k) => newSettings[k] !== undefined && newSettings[k] !== prev[k]);
-        set((state) => ({
-          settings: { ...state.settings, ...newSettings, ...(touchesPreset ? { preset: 'custom' as StrategyPreset } : {}) },
-        }));
+        set((state) => ({ settings: { ...state.settings, ...newSettings } }));
         if (newSettings.paperTrading !== undefined && newSettings.paperTrading !== prev.paperTrading) {
           get().log(
             newSettings.paperTrading ? 'info' : 'warning',
@@ -422,23 +302,6 @@ export const useBotStore = create<BotState>()(
           );
         }
         if (newSettings.solanaRpcUrl && newSettings.solanaRpcUrl !== prev.solanaRpcUrl) get().refreshWalletBalance();
-      },
-
-      applyPreset: (preset) => {
-        const { label, blurb, ...values } = STRATEGY_PRESETS[preset];
-        void blurb;
-        set((state) => ({ settings: { ...state.settings, ...values, preset } }));
-        get().log('info', `Strategy preset set to ${label}: min liquidity $${values.minLiquidityUsd}, AI gate >= ${values.aiMinConfidence}%, TP +${values.takeProfitPercent}% / SL -${values.stopLossPercent}%.`);
-      },
-
-      getTopSkipReason: () => {
-        const cutoff = Date.now() - 10 * 60_000;
-        const recent = get().skipReasons.filter((r) => r.at >= cutoff);
-        if (recent.length === 0) return null;
-        const tally = new Map<string, number>();
-        recent.forEach((r) => tally.set(r.reason, (tally.get(r.reason) || 0) + 1));
-        const [reason, count] = Array.from(tally.entries()).sort((a, b) => b[1] - a[1])[0];
-        return { reason, count, total: recent.length };
       },
 
       ingestCoins: (coins, origin = 'feed') => {
@@ -473,101 +336,7 @@ export const useBotStore = create<BotState>()(
           });
 
         get().updatePositionsWithLatestCoins(coins);
-
-        if (get().isActive) {
-          // Serialize evaluation so the AI gate and live execution never race.
-          snipeQueue = snipeQueue.then(() => get().processIncomingCoins(coins)).catch(() => {});
-        }
         void origin;
-      },
-
-      processIncomingCoins: async (incoming) => {
-        for (const coin of incoming) {
-          const state = get();
-          if (!state.isActive) return;
-          if (dailyLossReached()) {
-            pauseForDailyLoss();
-            return;
-          }
-          if (!coin?.id) continue;
-          if (state.processedCoinIds.includes(coin.id) || state.pendingTradeIds.includes(coin.id)) continue;
-          if (state.positions.some((p) => p.coin.id === coin.id)) continue;
-
-          const { settings } = state;
-
-          if (settings.targetOnlyMode) {
-            const sym = coin.symbol.toUpperCase();
-            const mint = mintOf(coin).toLowerCase();
-            const ok = settings.whitelistedSymbols.some((s) => s.toUpperCase() === sym || s.toLowerCase() === mint || s.toLowerCase() === coin.id.toLowerCase());
-            if (!ok) {
-              set((s) => ({ processedCoinIds: [...s.processedCoinIds, coin.id].slice(-2000) }));
-              continue;
-            }
-          }
-
-          const evalResult = BotService.evaluateCoinForSnipe(coin, settings, state.positions.length + state.pendingTradeIds.length);
-          if (!evalResult.pass) {
-            const transient = /Max positions/i.test(evalResult.reason);
-            if (!transient) set((s) => ({ processedCoinIds: [...s.processedCoinIds, coin.id].slice(-2000) }));
-            get().log('skip', `[SKIP] ${coin.symbol}: ${evalResult.reason}`, { coinSymbol: coin.symbol, chainId: coin.chainId });
-            set((st) => ({
-              skipReasons: [{ reason: evalResult.category, at: Date.now() }, ...st.skipReasons].slice(0, 200),
-              evaluatedCount: st.evaluatedCount + 1,
-            }));
-            continue;
-          }
-
-          if (!settings.paperTrading) {
-            if (!signerFor(settings.liveSigner)) {
-              get().log('warning', `[LIVE] Skipped ${coin.symbol}: ${signerMissingMessage(settings.liveSigner)}`, { coinSymbol: coin.symbol });
-              continue;
-            }
-            if (!isSolana(coin)) {
-              set((s) => ({ processedCoinIds: [...s.processedCoinIds, coin.id].slice(-2000) }));
-              get().log('skip', `[LIVE] Skipped ${coin.symbol}: live execution supports Solana only (token on ${coin.chainId}).`, { coinSymbol: coin.symbol });
-              continue;
-            }
-          } else if (state.walletBalance < settings.buyAmountUsd) {
-            get().log('warning', `[PAPER] Insufficient virtual balance ($${state.walletBalance.toFixed(2)}) to buy ${coin.symbol}.`, { coinSymbol: coin.symbol });
-            continue;
-          }
-
-          set((s) => ({ processedCoinIds: [...s.processedCoinIds, coin.id].slice(-2000), pendingTradeIds: [...s.pendingTradeIds, coin.id] }));
-
-          try {
-            let decision: AiDecision | undefined;
-            let tp = settings.takeProfitPercent;
-            let sl = settings.stopLossPercent;
-
-            if (settings.aiGateEnabled) {
-              decision = await AIService.decideSnipe(coin, settings, { openPositions: get().positions.length, stats: get().getStats() });
-              set({ lastAiDecision: { ...decision, symbol: coin.symbol, at: Date.now() } });
-              const approved = decision.action === 'buy' && decision.confidence >= settings.aiMinConfidence;
-              get().log(
-                'ai',
-                `[AI ${decision.source === 'ai' ? decision.model || 'claude' : 'heuristic'}] ${coin.symbol}: ${decision.action.toUpperCase()} (${decision.confidence}%) - ${decision.reason}`,
-                { coinSymbol: coin.symbol, chainId: coin.chainId }
-              );
-              if (!approved) {
-                set((st) => ({
-                  skipReasons: [{ reason: 'AI gate below threshold', at: Date.now() }, ...st.skipReasons].slice(0, 200),
-                  evaluatedCount: st.evaluatedCount + 1,
-                }));
-                continue;
-              }
-              if (settings.aiAdjustTargets) {
-                if (decision.suggestedTakeProfitPercent) tp = decision.suggestedTakeProfitPercent;
-                if (decision.suggestedStopLossPercent) sl = decision.suggestedStopLossPercent;
-              }
-            }
-
-            if (!get().isActive) continue;
-            set((st) => ({ evaluatedCount: st.evaluatedCount + 1 }));
-            await openPosition(coin, settings.buyAmountUsd, { tp, sl, decision, reason: 'auto-snipe' });
-          } finally {
-            set((s) => ({ pendingTradeIds: s.pendingTradeIds.filter((id) => id !== coin.id) }));
-          }
-        }
       },
 
       manualSnipeCoin: async (coin, amountUsd, reason = 'manual', targets) => {
@@ -727,8 +496,8 @@ export const useBotStore = create<BotState>()(
             const stillHeld = get().positions.some((p) => (p.mint || mintOf(p.coin)) === mint);
             if (!stillHeld) wsService.unsubscribeTokenTrades([mint]);
           }
-          if (!remaining && get().positions.length === 0 && !get().isActive) wsService.disconnect();
-          if (get().isActive && dailyLossReached()) pauseForDailyLoss();
+          // The stream stays open: the launch watcher and the New Launches feed use it.
+          if (get().settings.scannerAutoBuy && dailyLossReached()) announceDailyLossPause();
 
           return { success: true, message: `Sold ${pct}% of ${pos.coin.symbol} for $${proceedsUsd.toFixed(2)} (${sign}${pnlPercent.toFixed(1)}%).` };
         } finally {
@@ -943,7 +712,6 @@ export const useBotStore = create<BotState>()(
           walletBalance: 1000,
           positions: livePositions,
           history: s.history.filter((h) => h.isLive),
-          processedCoinIds: [],
         }));
         get().log('info', 'Paper wallet reset to $1,000. Paper positions and history cleared (live records kept).');
       },
@@ -970,8 +738,12 @@ export const useBotStore = create<BotState>()(
       getSnapshot: () => {
         const s = get();
         const { whitelistedSymbols, connectedWalletAddress, ...rest } = s.settings;
+        const running = s.settings.scannerAutoBuy;
         return {
-          isActive: s.isActive,
+          running,
+          // Kept for MCP clients that read the old field: true while auto trade is on.
+          isActive: running,
+          pausedForToday: running && dailyLossReached(),
           executionMode: s.settings.paperTrading ? 'paper' : 'live',
           wallet: {
             connected: s.settings.phantomWalletConnected,
@@ -1007,7 +779,6 @@ export const useBotStore = create<BotState>()(
         positions: state.positions,
         history: state.history,
         logs: state.logs.slice(0, 60),
-        isActive: false,
       }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as Partial<BotState>;
@@ -1016,13 +787,12 @@ export const useBotStore = create<BotState>()(
           ...p,
           settings: {
             ...DEFAULT_SETTINGS,
-            ...(p.settings || {}),
+            ...stripLegacySettings(p.settings),
             phantomWalletConnected: false,
             // Older sessions persisted the public mainnet URL, which now refuses browser requests.
             solanaRpcUrl: resolveRpcUrl(p.settings?.solanaRpcUrl) === RPC_PROXY ? DEFAULT_SOLANA_RPC : p.settings!.solanaRpcUrl,
             aiModel: resolveAiModel(p.settings?.aiModel),
           },
-          isActive: false,
         };
       },
     }
@@ -1064,6 +834,7 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
   const pnlPercent = pos.amountUsd > 0 ? (pnlUsd / pos.amountUsd) * 100 : 0;
   const highPriceUsd = Math.max(pos.highPriceUsd, price);
   const highAt = price > pos.highPriceUsd ? Date.now() : pos.highAt ?? pos.boughtAt;
+  recordPriceTrail(pos.id, price);
   const { settings } = store;
 
   // Profit lock: once the position has been up the trigger %, raise its stop above cost (amountUsd
@@ -1172,13 +943,46 @@ function dailyLossReached(): boolean {
   return limit > 0 && s.getTodayRealizedPnl() <= -limit;
 }
 
-function pauseForDailyLoss() {
+/** Day (local) for which the daily-loss pause was already announced, so it is said once. */
+let lossPauseAnnouncedFor = '';
+
+/**
+ * Auto trade stays switched on; it only stops opening positions until local midnight. Exits of open
+ * positions keep running.
+ */
+function announceDailyLossPause() {
+  const day = new Date().toDateString();
+  if (lossPauseAnnouncedFor === day) return;
+  lossPauseAnnouncedFor = day;
   const s = useBotStore.getState();
-  if (!s.isActive) return;
-  const msg = `Daily loss limit hit: $${s.getTodayRealizedPnl().toFixed(2)} realized today (limit -$${s.settings.dailyLossLimitUsd}). Bot paused; open positions are still managed.`;
-  s.toggleBot(false);
+  const msg = `Daily loss limit hit: $${s.getTodayRealizedPnl().toFixed(2)} realized today (limit -$${s.settings.dailyLossLimitUsd}). No new entries until tomorrow; open positions are still managed.`;
   s.log('warning', msg);
-  useBotStore.setState({ latestToastNotification: { title: 'Bot paused', description: msg, type: 'error' } });
+  useBotStore.setState({ latestToastNotification: { title: 'Auto trade paused for today', description: msg, type: 'error' } });
+}
+
+/** Settings of the retired launch sniper, dropped from saved sessions. */
+const LEGACY_SETTING_KEYS = [
+  'minLiquidityUsd',
+  'maxRiskLevel',
+  'minAiScore',
+  'targetChain',
+  'launchPlatform',
+  'scanSpeed',
+  'minBondingCurvePercent',
+  'maxTokenAgeMinutes',
+  'targetOnlyMode',
+  'preset',
+];
+
+function stripLegacySettings(saved?: Partial<BotSettings>): Partial<BotSettings> {
+  const out: Record<string, unknown> = { ...(saved || {}) };
+  LEGACY_SETTING_KEYS.forEach((k) => delete out[k]);
+  return out as Partial<BotSettings>;
+}
+
+/** True once today's realized loss reached the limit (auto trade holds new entries). */
+export function isDailyLossReached(): boolean {
+  return dailyLossReached();
 }
 
 async function openPosition(

@@ -1,6 +1,6 @@
 # CoinScope AI
 
-Memecoin intelligence terminal with a real-time auto-snipe bot, AI trade gate / copilot (Claude) and non-custodial Solana execution.
+Memecoin intelligence terminal with one auto-trading bot, a Claude trade review / copilot and non-custodial Solana execution.
 
 ## Stack
 
@@ -27,8 +27,8 @@ Memecoin intelligence terminal with a real-time auto-snipe bot, AI trade gate / 
 | Guardrails | Daily loss limit pauses the auto-bot; failed exits back off instead of retrying every tick; a late-landing transaction is detected from the balance change instead of being reported as failed |
 | Auto trade | **Auto Trade** tab: one switch. Every minute the setup scanner (RugCheck gates, clone filter, breakout / flag / pullback / RSI-rebound / momentum setups, Jupiter sell-back test) finds Ready signals; Claude reviews each one against the entry procedure in `skill memcoin.md`; approved signals are bought with the signal's stop and target and managed with TP / SL / profit lock. Daily loss limit pauses it |
 | AI scorecard | `POST /api/ai/analyze` – structured JSON from Claude, heuristic fallback without a key |
-| AI trade gate | `POST /api/ai/decide` – BUY/SKIP + confidence + stop/target (tighten only) + size factor; `{signal}` for scanner setups, `{coin}` for the launch sniper |
-| Launch sniper | Settings → *Launch sniper (advanced)*: the original second engine that buys brand-new Pump.fun mints from the live stream. Off by default |
+| AI trade gate | `POST /api/ai/decide` – `{signal}` → BUY/SKIP + confidence + stop/target (tighten only) + size factor, for every Ready signal before auto trade buys it |
+| Auto Trade desk | Live chart of the focused token (open position, the candidate Claude is reviewing, or a Ready signal) with entry / stop / target / profit-lock lines and fill markers; a pipeline panel that shows each scan stage with how many tokens survived it, the Claude review and the entry; position cards with live price, sparkline and stop-to-target bar; realized P&L curve. The chart reuses candles the scanner and launch watcher already hold, so it adds almost no API calls |
 | AI copilot chat | `POST /api/ai/chat` – Claude with tools (`get_new_coins`, `snipe_token`, `sell_position`, `update_settings`, `start_bot`, ...). Tools execute in the browser against the bot store |
 | Exits | Take-profit, stop-loss, trailing stop, manual / AI partial sells |
 
@@ -50,7 +50,7 @@ on the server with `COINSCOPE_LOGIN_USER` / `COINSCOPE_LOGIN_PASSWORD` (Vercel �
 Variables). Sessions last 30 days and renew while the dashboard is in use; the log-out button is in the
 header. `/api/mcp`, `/api/oauth/*` and `/api/bridge/*` keep their own `COINSCOPE_ACCESS_KEY` auth.
 
-Tabs: **Market** (DexScreener-style list, chart, trades, safety check, buy), **New Launches**, **Auto Trade** (the one switch, signals, positions, log, history) and **Settings** (money and wallets, sizing, Claude model, RPC; launch sniper and MCP at the bottom).
+Tabs: **Market** (DexScreener-style list, chart, trades, safety check, buy), **New Launches**, **Auto Trade** (the one switch, signals, positions, log, history) and **Settings** (money and wallets, sizing, Claude model, RPC, MCP). There is one bot: the old launch sniper was folded into auto trade's launch watcher.
 
 ## Going live (real funds)
 
@@ -60,7 +60,7 @@ Tabs: **Market** (DexScreener-style list, chart, trades, safety check, buy), **N
    - **Bot wallet**: create one (or import a dedicated key), back up the key with *Export key*, fund it with *Fund from wallet*, keep it unlocked. Trades are signed automatically. It is a hot wallet - keep only trading money in it and *Withdraw* the rest.
 3. Set a private RPC (Helius, QuickNode, Triton) in Settings or as `SOLANA_RPC_URL` on the server. The built-in proxy falls back to public endpoints, which are rate-limited.
 4. Click **Test live pipeline** in the same panel. It builds the real swap for the signing address and simulates it on the RPC; nothing is signed.
-5. Set the **daily loss limit** and a small buy size, then toggle **Live trading** and start the bot.
+5. Set the **daily loss limit** and a small buy size, then toggle **Live trading** and press **Start auto trade**. Hitting the daily loss limit pauses new entries until midnight; open positions keep being managed.
 6. Keep the tab open in the foreground on a PC that does not sleep (the page keeps the screen awake, plays an inaudible tone so the browser does not throttle it, and warns before closing). The engine runs in the browser: closing the tab stops entries, exits and the profit lock. A 24-hour run means a 24-hour open tab; there is no server-side engine (Vercel functions cannot run a loop).
 
 Live execution is Solana-only. Tokens on EVM chains are always paper-traded.

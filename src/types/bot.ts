@@ -1,12 +1,7 @@
 import { CoinData } from './coin';
 
 export type RiskLevel = 'Low' | 'Medium' | 'High' | 'Critical';
-export type ChainOption = 'all' | 'solana' | 'ethereum' | 'base' | 'bsc' | 'arbitrum';
-
-export type LaunchPlatform = 'all' | 'pumpfun' | 'dexscreener';
-export type ScanSpeed = 'websocket' | '1s' | '3s' | '5s';
 export type ExecutionMode = 'paper' | 'live';
-export type StrategyPreset = 'conservative' | 'balanced' | 'aggressive' | 'custom';
 /** 'wallet' = Phantom/Solflare signs (one approval per trade); 'bot' = the in-browser bot wallet signs unattended. */
 export type LiveSignerKind = 'wallet' | 'bot';
 
@@ -23,15 +18,13 @@ export interface AiDecision {
   model?: string;
 }
 
+/**
+ * Settings of the one trading bot (auto trade). Auto trade buys with each signal's own stop and
+ * target; takeProfitPercent / stopLossPercent are the defaults for manual buys from the Market tab
+ * and the copilot.
+ */
 export interface BotSettings {
   buyAmountUsd: number;
-  minLiquidityUsd: number;
-  maxRiskLevel: RiskLevel;
-  minAiScore: number;
-  targetChain: ChainOption;
-  launchPlatform: LaunchPlatform;
-  scanSpeed: ScanSpeed;
-  minBondingCurvePercent: number;
   takeProfitPercent: number;
   stopLossPercent: number;
   /** 0 disables the trailing stop. Otherwise the position closes when price falls X% from its high. */
@@ -48,7 +41,6 @@ export interface BotSettings {
   slippagePercent: number;
   /** true = simulated fills with a virtual USD balance; false = real on-chain swaps through the connected wallet. */
   paperTrading: boolean;
-  maxTokenAgeMinutes: number;
   soundAlerts: boolean;
   solanaRpcUrl: string;
   /** Priority fee (in SOL) attached to live Solana swaps. */
@@ -57,9 +49,9 @@ export interface BotSettings {
   connectedWalletAddress: string | null;
   solBalance: number;
   walletType: 'phantom' | 'solflare' | null;
-  targetOnlyMode: boolean;
+  /** Watchlist on the Market tab. It does not affect what auto trade buys. */
   whitelistedSymbols: string[];
-  /** Ask the AI advisor before every automatic buy. */
+  /** Ask Claude before every automatic buy. */
   aiGateEnabled: boolean;
   /** Minimum AI confidence (0-100) required for the gate to approve a buy. */
   aiMinConfidence: number;
@@ -67,16 +59,14 @@ export interface BotSettings {
   aiAdjustTargets: boolean;
   /** Claude model id used for the gate, the scorecard and the copilot (see lib/ai-models.ts). */
   aiModel: string;
-  /** Which risk preset the filters came from ('custom' once the user edits a field). */
-  preset: StrategyPreset;
   /** Which wallet signs live trades. */
   liveSigner: LiveSignerKind;
   /** Pause the auto-bot once today's realized loss reaches this many USD. 0 disables the limit. */
   dailyLossLimitUsd: number;
   /**
-   * Let the setup scanner open positions by itself: only Ready signals that scored at least the
-   * entry threshold and passed the sell-back quote, one per scan, within maxPositions and the
-   * daily loss limit. Off by default.
+   * Auto trade on/off - the bot's one switch. While on, Ready signals that scored at least the
+   * entry threshold and passed the sell-back quote are bought one at a time, within maxPositions
+   * and the daily loss limit. Off by default.
    */
   scannerAutoBuy: boolean;
   /** 'simple' also buys 5m momentum breakouts as they happen; 'strict' waits for retests and pullbacks. */

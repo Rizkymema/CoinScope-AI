@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { minEntryScore, ScannerService, ScanSignal } from '../services/scanner.service';
+import { minEntryScore, ScannerService, ScanSignal, ScanStage } from '../services/scanner.service';
 import { LAUNCH_TIME_STOP_MINUTES, LaunchWatcher } from '../services/launch.service';
 import { AudioService } from '../services/audio.service';
 import { SolPriceService } from '../services/solprice.service';
@@ -20,6 +20,44 @@ const PREFS_KEY = 'coinscope:scanner';
 /** The micro-account rule from the skill: a wider stop does not fit a $3-5 position. */
 const MAX_STOP_PERCENT = 12;
 
+/** Every stage a token passes on its way to a position, in order (the live pipeline view). */
+export type PipelineStage = ScanStage | 'review' | 'entry';
+export const PIPELINE_STAGES: PipelineStage[] = ['discover', 'filter', 'safety', 'setup', 'sellback', 'review', 'entry'];
+
+export interface StageState {
+  state: 'idle' | 'active' | 'done';
+  count?: number;
+  detail?: string;
+}
+
+/** One pass of the market scanner, stage by stage. */
+export interface ScanCycle {
+  n: number;
+  startedAt: number;
+  endedAt: number | null;
+  stages: Record<ScanStage, StageState>;
+}
+
+/** The candidate the auto-buy is working on right now (or finished with last). */
+export interface EntryReview {
+  signal: ScanSignal;
+  source: 'scanner' | 'launch';
+  startedAt: number;
+  phase: 'review' | 'entry' | 'done';
+  outcome?: 'bought' | 'skipped' | 'held' | 'failed';
+  detail?: string;
+  confidence?: number;
+  endedAt?: number;
+}
+
+const idleStages = (): Record<ScanStage, StageState> => ({
+  discover: { state: 'idle' },
+  filter: { state: 'idle' },
+  safety: { state: 'idle' },
+  setup: { state: 'idle' },
+  sellback: { state: 'idle' },
+});
+
 interface ScannerState {
   enabled: boolean;
   alerts: boolean;
@@ -36,6 +74,12 @@ interface ScannerState {
   launches: ScanSignal[];
   /** How many new launches are being streamed right now. */
   launchWatched: number;
+  /** The scan in progress, or the last one. */
+  cycle: ScanCycle | null;
+  /** When the next scan starts (countdown in the live view). */
+  nextScanAt: number | null;
+  /** The auto-buy's current or last candidate. */
+  review: EntryReview | null;
 
   init: () => void;
   setEnabled: (on: boolean) => void;
@@ -180,6 +224,15 @@ async function autoBuy(ready: ScanSignal[]) {
     );
   if (!candidate) return;
 
+  const source: EntryReview['source'] = candidate.setup === 'launch' ? 'launch' : 'scanner';
+  const track = (patch: Partial<EntryReview>) =>
+    useScannerStore.setState((st) => ({
+      review: st.review && st.review.signal.id === candidate.id ? { ...st.review, ...patch } : { signal: candidate, source, startedAt: Date.now(), phase: 'review', ...patch },
+    }));
+  const finish = (outcome: NonNullable<EntryReview['outcome']>, detail: string, confidence?: number) =>
+    track({ phase: 'done', outcome, detail, confidence, endedAt: Date.now() });
+  useScannerStore.setState({ review: { signal: candidate, source, startedAt: Date.now(), phase: settings.aiGateEnabled ? 'review' : 'entry' } });
+
   // Checked only once a signal would actually be bought, so an underfunded wallet is logged per
   // missed signal (at most hourly per token) instead of every scan.
   if (!settings.paperTrading) {
@@ -189,6 +242,7 @@ async function autoBuy(ready: ScanSignal[]) {
     const capitalUsd = (signerSol + funderSol) * solPrice;
     const buySol = solPrice > 0 ? settings.buyAmountUsd / solPrice : Infinity;
     const skip = (why: string) => {
+      finish('held', why);
       autoBuyAt.set(candidate.id, Date.now());
       bot.log('warning', `[AUTO-BUY] Skipped ${candidate.coin.symbol}: ${why}`, { coinSymbol: candidate.coin.symbol });
     };
@@ -238,11 +292,13 @@ async function autoBuy(ready: ScanSignal[]) {
           bot.log('warning', `[AI GATE] ${why} - auto-buy is holding entries until this is fixed (or turn the AI review off).`);
           useBotStore.setState({ latestToastNotification: { title: 'AI review is not working', description: why, type: 'error' } });
         }
+        finish('held', why);
         return;
       }
       warnedAiProblem = null;
       if (!notConfigured && !settings.paperTrading) {
         bot.log('warning', `[AI GATE] No answer from Claude (${why}) - ${candidate.coin.symbol} not bought yet, retried next scan.`, { coinSymbol: candidate.coin.symbol });
+        finish('held', `No answer from Claude (${why}) - retried next scan`);
         return;
       }
       if (notConfigured) {
@@ -265,8 +321,10 @@ async function autoBuy(ready: ScanSignal[]) {
       if (!approved) {
         autoBuyAt.set(candidate.id, Date.now());
         aiSkipped.add(candidate.id);
+        finish('skipped', verdict.reason, verdict.confidence);
         return;
       }
+      track({ confidence: verdict.confidence, detail: verdict.reason });
       if (settings.aiAdjustTargets) {
         if (verdict.suggestedStopLossPercent) sl = round1(Math.max(4, Math.min(sl, verdict.suggestedStopLossPercent)));
         if (verdict.suggestedTakeProfitPercent) tp = round1(Math.max(tp * 0.8, Math.min(tp * 1.5, verdict.suggestedTakeProfitPercent)));
@@ -282,12 +340,14 @@ async function autoBuy(ready: ScanSignal[]) {
 
   autoBuyAt.set(candidate.id, Date.now());
   aiSkipped.delete(candidate.id);
+  track({ phase: 'entry' });
   let coin = candidate.coin;
   if (candidate.setup === 'launch') {
     // Claude's review takes seconds and a launch can move that fast: re-check before paying.
     const now = await LaunchWatcher.recheck(candidate.id, candidate.entryHigh ?? Infinity);
     if (!now.ok) {
       bot.log('warning', `[AUTO-BUY] Skipped ${candidate.coin.symbol}: ${now.reason}`, { coinSymbol: candidate.coin.symbol });
+      finish('skipped', now.reason);
       return;
     }
     coin = { ...coin, priceUsd: now.priceUsd };
@@ -298,6 +358,8 @@ async function autoBuy(ready: ScanSignal[]) {
     timeStopMinutes: candidate.setup === 'launch' ? LAUNCH_TIME_STOP_MINUTES : undefined,
   });
   bot.log(r.success ? 'buy' : 'warning', `[AUTO-BUY] ${candidate.coin.symbol}: ${r.message}`, { coinSymbol: candidate.coin.symbol });
+  const prior = useScannerStore.getState().review;
+  finish(r.success ? 'bought' : 'failed', r.message, prior?.signal.id === candidate.id ? prior.confidence : undefined);
   if (!r.success) {
     useBotStore.setState({ latestToastNotification: { title: `Auto-buy failed: ${candidate.coin.symbol}`, description: r.message, type: 'error', coinSymbol: candidate.coin.symbol } });
   }
@@ -319,6 +381,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
   const schedule = () => {
     if (timer) clearTimeout(timer);
     timer = get().enabled ? setTimeout(() => void get().scanNow(), SCAN_INTERVAL_MS) : null;
+    set({ nextScanAt: timer ? Date.now() + SCAN_INTERVAL_MS : null });
   };
 
   /** The launch watcher runs while the scanner does and new launches are switched on in Settings. */
@@ -352,6 +415,9 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
     autoSince: null,
     launches: [],
     launchWatched: 0,
+    cycle: null,
+    nextScanAt: null,
+    review: null,
 
     init: () => {
       if (initialized || typeof window === 'undefined') return;
@@ -417,7 +483,10 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
 
     scanNow: async () => {
       if (get().scanning) return;
-      set({ scanning: true, error: null });
+      const n = (get().cycle?.n ?? 0) + 1;
+      set({ scanning: true, error: null, nextScanAt: null, cycle: { n, startedAt: Date.now(), endedAt: null, stages: idleStages() } });
+      const onStage = (id: ScanStage, info: { state: 'active' | 'done'; count?: number; detail?: string }) =>
+        set((st) => (st.cycle && st.cycle.n === n ? { cycle: { ...st.cycle, stages: { ...st.cycle.stages, [id]: info } } } : {}));
       try {
         const bot = useBotStore.getState();
         const { settings } = bot;
@@ -430,7 +499,9 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
           maxStopPercent: MAX_STOP_PERCENT,
           priorityMints: get().signals.filter((s) => s.status !== 'rejected').map((s) => s.id),
           smartWallets: settings.smartWallets,
+          onStage,
         });
+        set((st) => (st.cycle && st.cycle.n === n ? { cycle: { ...st.cycle, endedAt: Date.now() } } : {}));
 
         const minScore = minEntryScore(useBotStore.getState().settings.scannerMode);
         const ready = result.signals.filter((s) => s.status === 'ready' && (s.score?.total ?? 0) >= minScore);
@@ -493,7 +564,7 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
       } catch (err) {
         set({ error: err instanceof Error ? err.message : 'Scan failed' });
       } finally {
-        set({ scanning: false });
+        set((st) => ({ scanning: false, cycle: st.cycle && !st.cycle.endedAt ? { ...st.cycle, endedAt: Date.now() } : st.cycle }));
         schedule();
       }
     },

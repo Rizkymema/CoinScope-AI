@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Bot, Brain, Check, DollarSign, Play, Square, Wallet } from 'lucide-react';
+import { AlertTriangle, Bot, Brain, Check, ChevronDown, DollarSign, Play, Square, Wallet } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 import { useScannerStore } from '@/store/useScannerStore';
@@ -13,6 +13,9 @@ import { BotMetricsBar } from './bot/BotMetricsBar';
 import { BotPositionsTable } from './bot/BotPositionsTable';
 import { BotTerminalLogs } from './bot/BotTerminalLogs';
 import { BotTradeHistory } from './bot/BotTradeHistory';
+import { FocusChart, FocusKey } from './desk/FocusChart';
+import { PipelinePanel } from './desk/PipelinePanel';
+import { PnlCurve } from './desk/PnlCurve';
 
 /** Lets any page jump to a header tab (the tab state lives in page.tsx). */
 export const goToTab = (tab: 'trending' | 'new' | 'auto' | 'settings') => window.dispatchEvent(new CustomEvent('coinscope:tab', { detail: tab }));
@@ -99,7 +102,12 @@ export const AutoTradePage: React.FC = () => {
   const aiReady = !aiOn || aiKey?.configured !== false;
   const todayPnl = getTodayRealizedPnl();
   const lossLimitHit = settings.dailyLossLimitUsd > 0 && todayPnl <= -settings.dailyLossLimitUsd;
-  const canStart = signerReady && !lossLimitHit;
+  // The daily loss limit pauses entries for the rest of the day; it does not switch the bot off.
+  const pausedToday = running && lossLimitHit;
+  const canStart = signerReady;
+  const [focusKey, setFocusKey] = useState<FocusKey | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const showSetup = !running || setupOpen;
 
   const toggle = () => {
     if (running) {
@@ -111,7 +119,7 @@ export const AutoTradePage: React.FC = () => {
       !window.confirm(
         `Auto trade will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${minEntryScore(
           settings.scannerMode
-        )}) that pass the sell-back test${aiOn ? ' and Claude approves' : ''}. It stops for the day after $${settings.dailyLossLimitUsd} of losses. Turn it on?`
+        )}) that pass the sell-back test${aiOn ? ' and Claude approves' : ''}. It stops opening positions for the day after $${settings.dailyLossLimitUsd} of losses. Turn it on?`
       )
     ) {
       return;
@@ -122,12 +130,12 @@ export const AutoTradePage: React.FC = () => {
   return (
     <div className="space-y-5">
       {/* ------------------------------------------------------------ hero */}
-      <section className={`panel p-5 sm:p-6 ${running ? 'border-pos/30' : ''}`}>
+      <section className={`panel p-5 sm:p-6 ${pausedToday ? 'border-warn/30' : running ? 'border-pos/30' : ''}`}>
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
           <div className="flex items-start gap-3.5 min-w-0">
             <span
               className={`grid place-items-center w-11 h-11 rounded-xl border shrink-0 ${
-                running ? 'bg-pos/10 border-pos/30 text-pos' : 'bg-ink-850 border-line text-slate-500'
+                pausedToday ? 'bg-warn/10 border-warn/30 text-warn' : running ? 'bg-pos/10 border-pos/30 text-pos' : 'bg-ink-850 border-line text-slate-500'
               }`}
             >
               <Bot className="w-5 h-5" />
@@ -136,8 +144,8 @@ export const AutoTradePage: React.FC = () => {
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1 className="text-[15px] font-bold text-white leading-none">Auto trade</h1>
                 <span className="flex items-center gap-1.5 text-[13px] text-slate-400">
-                  <span className={`dot ${running ? 'dot-live' : 'dot-idle'}`} />
-                  {running ? `On${autoSince ? ` · ${uptime(autoSince)}` : ''}` : 'Off'}
+                  <span className={`dot ${pausedToday ? 'dot-warn' : running ? 'dot-live' : 'dot-idle'}`} />
+                  {pausedToday ? 'Paused for today' : running ? `On${autoSince ? ` · ${uptime(autoSince)}` : ''}` : 'Off'}
                 </span>
                 <span className={live ? 'chip chip-neg' : 'chip chip-warn'}>{live ? 'Live funds' : 'Paper'}</span>
               </div>
@@ -173,7 +181,7 @@ export const AutoTradePage: React.FC = () => {
               onClick={toggle}
               disabled={!running && !canStart}
               className={`btn btn-lg w-full lg:w-auto ${running ? 'btn-danger' : 'btn-primary'}`}
-              title={!running && !canStart ? (lossLimitHit ? 'Daily loss limit reached' : 'Finish step 1 first') : undefined}
+              title={!running && !canStart ? 'Finish step 1 first' : undefined}
             >
               {running ? (
                 <>
@@ -188,16 +196,23 @@ export const AutoTradePage: React.FC = () => {
               )}
             </button>
             {lossLimitHit && (
-              <p className="text-[11px] text-neg mt-2 flex items-center gap-1.5 lg:justify-end">
+              <p className="text-[11px] text-warn mt-2 flex items-center gap-1.5 lg:justify-end">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                Daily loss limit reached — resumes tomorrow.
+                Daily loss limit reached: no new entries until tomorrow.
               </p>
+            )}
+            {running && (
+              <button type="button" onClick={() => setSetupOpen((v) => !v)} aria-expanded={setupOpen} className="btn btn-sm btn-ghost w-full lg:w-auto mt-2 lg:ml-auto lg:flex">
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${setupOpen ? 'rotate-180' : ''}`} />
+                {setupOpen ? 'Hide setup' : 'Money, size and AI'}
+              </button>
             )}
           </div>
         </div>
 
-        {/* ---------------------------------------------------------- steps */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
+        {/* ---------------------------------------------------------- steps (folded away while running) */}
+        {showSetup && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5 animate-fade-up">
           <Step n={1} title="Money" ok={signerReady}>
             <p className={`text-[13px] ${signerReady ? 'text-slate-200' : 'text-neg'}`}>{moneyText}</p>
             <div className="flex items-center gap-2 mt-2.5 flex-wrap">
@@ -289,8 +304,9 @@ export const AutoTradePage: React.FC = () => {
             </p>
           </Step>
         </div>
+        )}
 
-        {running && (
+        {running && showSetup && (
           <p className="text-[11px] text-slate-500 mt-4 pt-3 border-t border-line leading-relaxed">
             The engine runs in this tab. For 24-hour trading keep it open in the foreground on a PC that does not sleep; the page keeps the screen awake
             and warns before closing. Closing the tab stops entries, exits and the profit lock.
@@ -309,13 +325,24 @@ export const AutoTradePage: React.FC = () => {
 
       <BotMetricsBar />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-        <BotPositionsTable />
+      {/* ------------------------------------------------------------ desk: chart + pipeline */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+        <div className="xl:col-span-2 min-w-0">
+          <FocusChart focusKey={focusKey} onFocus={setFocusKey} />
+        </div>
+        <PipelinePanel />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+        <div className="xl:col-span-2 min-w-0">
+          <BotPositionsTable focusKey={focusKey} onFocus={setFocusKey} />
+        </div>
         <BotTerminalLogs />
       </div>
 
       <ScannerSignals />
 
+      <PnlCurve />
       <BotTradeHistory />
     </div>
   );

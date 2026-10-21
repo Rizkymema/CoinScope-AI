@@ -181,7 +181,12 @@ export interface ScanOptions {
   mode?: ScanMode;
   /** Wallet addresses whose holdings are scanned too and counted on each signal. */
   smartWallets?: string[];
+  /** Progress of each pipeline stage, for the live view. Never affects what the scan decides. */
+  onStage?: (stage: ScanStage, info: { state: 'active' | 'done'; count?: number; detail?: string }) => void;
 }
+
+/** The scanner's own stages, in order. Review and entry belong to the auto-buy that follows. */
+export type ScanStage = 'discover' | 'filter' | 'safety' | 'setup' | 'sellback';
 
 /* ------------------------------------------------------------------ plumbing */
 
@@ -380,6 +385,15 @@ async function safetyGates(mint: string): Promise<ScanGates | null> {
 /* ------------------------------------------------------------------ chart setups */
 
 const candleMemo = new Map<string, { at: number; candles: Candle[] }>();
+/** Pool the scanner charts for each mint, so the live view can reuse its candles. */
+const poolOfMint = new Map<string, string>();
+
+/** 5m candles the scanner already holds for a mint (no network call), oldest first. */
+export function cachedCandles(mint: string): { candles: Candle[]; at: number } | null {
+  const pool = poolOfMint.get(mint);
+  const hit = pool ? candleMemo.get(pool) : undefined;
+  return hit ? { candles: hit.candles, at: hit.at } : null;
+}
 
 /** GeckoTerminal GET that starts the rate-limit pause on a 429 instead of retrying into it. */
 async function geckoJson(url: string): Promise<any | null> {
@@ -713,6 +727,14 @@ export async function swapCheck(mint: string, lamports: number): Promise<SwapChe
 
 export const ScannerService = {
   async scan(opts: ScanOptions): Promise<ScanResult> {
+    const stage = (id: ScanStage, state: 'active' | 'done', count?: number, detail?: string) => {
+      try {
+        opts.onStage?.(id, { state, count, detail });
+      } catch {
+        // the live view must never break a scan
+      }
+    };
+    stage('discover', 'active');
     const tracked = opts.smartWallets || [];
     const smart = await SmartWalletService.holdings(tracked);
     // With three or more tracked wallets a single holder is too weak a lead; require two.
@@ -724,6 +746,8 @@ export const ScannerService = {
       .map(([mint]) => mint);
     const mints = [...new Set([...(await candidateMints()), ...smartMints])];
     const pairs = await bestPairs(mints);
+    stage('discover', 'done', pairs.size);
+    stage('filter', 'active');
     const signals: ScanSignal[] = [];
     const smartCount = (mint: string) => smart.get(mint)?.length || 0;
 
@@ -761,6 +785,8 @@ export const ScannerService = {
       else survivors.push(p);
     });
 
+    stage('filter', 'done', survivors.length);
+    stage('safety', 'active', undefined, `${survivors.length} to RugCheck`);
     const gated: { pair: any; gates: ScanGates }[] = [];
     await mapLimit(survivors, 4, async (pair) => {
       const gates = await safetyGates(pair.baseToken.address);
@@ -787,8 +813,14 @@ export const ScannerService = {
     const lamports = Math.round((opts.buyAmountUsd / (opts.solPriceUsd || 1)) * 1e9);
     const feePct = opts.buyAmountUsd > 0 ? (100 * 2 * opts.priorityFeeSol * opts.solPriceUsd) / opts.buyAmountUsd : 0;
 
+    stage('safety', 'done', gated.length);
+    stage('setup', 'active');
+    let setups = 0;
+    let readyCount = 0;
     await mapLimit(gated, 1, async ({ pair, gates }) => {
       const mint = pair.baseToken.address;
+      poolOfMint.set(mint, pair.pairAddress);
+      stage('setup', 'active', setups, `$${pair.baseToken?.symbol || '?'}`);
       const ttl = priority.has(mint) ? PRIORITY_CANDLE_TTL_MS : CANDLE_TTL_MS;
       if (chartAge(pair.pairAddress) > ttl && fetchesLeft > 0 && Date.now() >= geckoCooldownUntil) {
         fetchesLeft--;
@@ -857,7 +889,9 @@ export const ScannerService = {
         rsi: read.rsi,
       };
 
+      setups++;
       if (status === 'ready') {
+        stage('sellback', 'active', readyCount, `$${pair.baseToken?.symbol || '?'}`);
         const swap = await swapCheck(mint, lamports);
         signal.swap = swap;
         if (!swap.sellable) {
@@ -872,8 +906,11 @@ export const ScannerService = {
           signal.reason = `${reason} - fees of ${cost.toFixed(1)}% leave reward under risk at this size`;
         }
       }
+      if (signal.status === 'ready') readyCount++;
       signals.push(signal);
     });
+    stage('setup', 'done', setups);
+    stage('sellback', 'done', readyCount);
 
     const rank: Record<SignalStatus, number> = { ready: 0, watch: 1, rejected: 2 };
     signals.sort((a, b) => rank[a.status] - rank[b.status] || (b.score?.total ?? 0) - (a.score?.total ?? 0) || b.volume1hUsd - a.volume1hUsd);

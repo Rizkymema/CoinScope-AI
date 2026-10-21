@@ -65,12 +65,12 @@ const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: 'start_bot',
-    description: 'Start the auto-snipe bot (connects the real-time stream and begins evaluating new launches).',
+    description: 'Switch on auto trade, the one bot: it scans every minute, has Claude review Ready signals and buys the approved ones. Real funds when paperTrading is false - only on explicit user instruction.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'stop_bot',
-    description: 'Pause the auto-snipe bot. Open positions are kept and still monitored.',
+    description: 'Switch off auto trade. No new entries; open positions are kept and still managed.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -105,16 +105,10 @@ const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
           enum: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
           description: 'Claude model used by the trade gate and this chat.',
         },
-        minLiquidityUsd: { type: 'number', minimum: 0 },
-        maxTokenAgeMinutes: { type: 'number', minimum: 0 },
         maxPositions: { type: 'integer', minimum: 1, maximum: 50 },
         slippagePercent: { type: 'number', minimum: 0.5, maximum: 50 },
-        minBondingCurvePercent: { type: 'number', minimum: 0, maximum: 100 },
-        targetChain: { type: 'string', enum: ['all', 'solana', 'ethereum', 'base', 'bsc', 'arbitrum'] },
-        launchPlatform: { type: 'string', enum: ['all', 'pumpfun', 'dexscreener'] },
         autoSell: { type: 'boolean' },
         paperTrading: { type: 'boolean' },
-        targetOnlyMode: { type: 'boolean' },
         aiGateEnabled: { type: 'boolean' },
         aiMinConfidence: { type: 'number', minimum: 0, maximum: 100 },
         aiAdjustTargets: { type: 'boolean' },
@@ -171,7 +165,7 @@ const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: 'manage_targets',
-    description: 'Add or remove symbols / addresses in the bot target whitelist (used when targetOnlyMode is on).',
+    description: 'Add or remove symbols / addresses on the Market-tab watchlist. It does not change what auto trade buys.',
     input_schema: {
       type: 'object',
       properties: {
@@ -196,7 +190,7 @@ You are also the user's trading desk: you read live state and execute through to
 - When the user asks what to buy, start from get_scanner_signals: Ready signals already passed the safety gates and the sell-back test and carry a stop and target whose reward beats the risk after fees. Buying one with snipe_token keeps those levels. No setup can guarantee a profit; say so plainly when asked, and explain the stop and target instead.
 - When asked to trade, change strategy, or start/stop the bot, do it with the tools, then report exactly what happened: fills, amounts, tx signatures, rejections and errors. Never claim a trade executed unless the tool result says success.
 - When asked for a recommendation, deliver a professional desk note: (1) verdict, (2) key metrics, (3) risk grade and what could go wrong, (4) concrete plan - size, TP/SL, invalidation, (5) what you would monitor next. Offer to execute the plan; execute immediately only when the user has asked for action.
-- Manage the portfolio like a risk manager: flag over-exposure (too many open positions, oversized buys vs. balance), stale positions with fading flow, positions near TP/SL, and settings that are inconsistent (e.g. tight SL on illiquid curve tokens, 0 minimum liquidity, AI gate off in live mode). Suggest specific corrections with numbers.
+- Manage the portfolio like a risk manager: flag over-exposure (too many open positions, oversized buys vs. balance), stale positions with fading flow, positions near TP/SL, and settings that are inconsistent (e.g. a buy size that is a large share of the balance, AI review off in live mode, a daily loss limit of 0). Suggest specific corrections with numbers.
 - Switching paperTrading to false puts real funds at risk. Do that only on an explicit instruction, confirm the wallet is connected first, and state the risk in one sentence. Prefer conservative sizes for a first live run.
 - Educate briefly when useful (what a bonding curve is, why liquidity/mcap matters, why slippage is set high for new launches), but keep answers tight.
 - Reply in the user's language (Indonesian when they write Indonesian; keep crypto terms like liquidity, market cap, TP/SL, bonding curve in English). Use short bullet lists for multiple coins. Format prices with sensible precision (e.g. $0.00001234, MCap $12.5K).`;
