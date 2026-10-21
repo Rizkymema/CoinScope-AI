@@ -60,7 +60,7 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
   const { isBotActive, recentCoins, ingestCoins, manualSnipeCoin, isWsConnected, pendingTradeIds, positions, settings } =
     useBotStore(
       useShallow((s) => ({
-        isBotActive: s.isActive,
+        isBotActive: s.settings.scannerAutoBuy,
         recentCoins: s.recentCoins,
         ingestCoins: s.ingestCoins,
         manualSnipeCoin: s.manualSnipeCoin,
@@ -198,7 +198,7 @@ const NewCoinsLiveFeedComponent: React.FC = () => {
           <span className="flex items-center gap-1.5 text-xs text-slate-400">
             <Radio className={`w-3.5 h-3.5 ${isWsConnected ? 'text-pos' : 'text-slate-600'}`} />
             {isWsConnected ? 'Stream live' : 'Connecting…'}
-            {isBotActive && <span className="text-slate-600">· bot {settings.paperTrading ? 'paper' : 'live'}</span>}
+            {isBotActive && <span className="text-slate-600">· auto trade {settings.paperTrading ? 'paper' : 'live'}</span>}
           </span>
           <button
             type="button"

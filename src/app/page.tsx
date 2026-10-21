@@ -33,7 +33,6 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>('trending');
 
   const {
-    isSniperActive,
     isWsConnected,
     solPriceUsd,
     toast,
@@ -45,7 +44,6 @@ export default function DashboardPage() {
     setWalletDialogOpen,
   } = useBotStore(
     useShallow((s) => ({
-      isSniperActive: s.isActive,
       isWsConnected: s.isWsConnected,
       solPriceUsd: s.solPriceUsd,
       toast: s.latestToastNotification,
@@ -75,7 +73,7 @@ export default function DashboardPage() {
 
   const logout = async () => {
     // The engine runs in this tab and its API calls need the session: say what stops.
-    if ((autoTradeOn || isSniperActive || positionsCount > 0) && !window.confirm('Logging out stops auto trade, the sniper and the exits of open positions in this tab. Log out anyway?')) return;
+    if ((autoTradeOn || positionsCount > 0) && !window.confirm('Logging out stops auto trade and the exits of open positions in this tab. Log out anyway?')) return;
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
     } finally {
@@ -86,7 +84,7 @@ export default function DashboardPage() {
   // Entries, exits and MCP commands run in this tab: keep it awake (screen, and an inaudible tone so
   // the browser does not throttle or freeze it when hidden) and warn before closing it. Live mode
   // counts even while idle, otherwise a backgrounded tab answers MCP too late.
-  useKeepAlive(isSniperActive || hasLivePositions || autoTradeOn || !settings.paperTrading);
+  useKeepAlive(hasLivePositions || autoTradeOn || !settings.paperTrading);
 
   // Hydrate the persisted store on the client only, then start streams and wallet reconnect.
   useEffect(() => {
@@ -177,8 +175,8 @@ export default function DashboardPage() {
               className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400"
               title={autoTradeOn ? 'Auto trade is buying confirmed signals' : isWsConnected ? 'Launch stream connected' : 'Launch stream reconnecting'}
             >
-              <span className={`dot ${autoTradeOn || isSniperActive ? 'dot-live' : isWsConnected ? 'dot-live' : 'dot-idle'}`} />
-              {autoTradeOn ? 'Auto trade on' : isSniperActive ? 'Sniper running' : isWsConnected ? 'Streaming' : 'Offline'}
+              <span className={`dot ${autoTradeOn || isWsConnected ? 'dot-live' : 'dot-idle'}`} />
+              {autoTradeOn ? 'Auto trade on' : isWsConnected ? 'Streaming' : 'Offline'}
             </span>
 
             <button
@@ -186,6 +184,7 @@ export default function DashboardPage() {
               onClick={() => setIsLoginOpen(true)}
               className="btn btn-secondary"
               title={walletLabel ? `${walletName} connected: ${settings.connectedWalletAddress}` : 'Connect a wallet'}
+              aria-label={walletLabel ? `${walletName} wallet ${walletLabel}` : 'Connect a wallet'}
             >
               {walletLabel ? (
                 <>
@@ -197,7 +196,7 @@ export default function DashboardPage() {
               ) : (
                 <>
                   <Key className="w-3.5 h-3.5" />
-                  <span>Connect</span>
+                  <span className="hidden sm:inline">Connect</span>
                 </>
               )}
             </button>
@@ -271,7 +270,7 @@ export default function DashboardPage() {
           <>
             <div>
               <h1 className="text-[15px] font-bold text-white leading-tight">Settings</h1>
-              <p className="text-[13px] text-slate-400 mt-0.5">Money and wallets, sizing and risk, the Claude model, and the connection. The launch sniper and MCP are at the bottom.</p>
+              <p className="text-[13px] text-slate-400 mt-0.5">Money and wallets, sizing and risk, the Claude model, the connection and MCP. Auto trade itself is switched on in the Auto Trade tab.</p>
             </div>
             <BotSettingsPanel />
           </>

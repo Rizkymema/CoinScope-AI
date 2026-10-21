@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2, Radio } from 'lucide-react';
-import type { IChartApi, ISeriesApi, IPriceLine, Time } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, IPriceLine, ISeriesMarkersPluginApi, Time } from 'lightweight-charts';
 
 import { CoinData } from '@/types/coin';
 import { BotPosition } from '@/types/bot';
@@ -46,23 +46,55 @@ function formatCompact(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
+/** A horizontal level on the price scale. */
+export interface ChartLevel {
+  price: number;
+  kind: 'entry' | 'zone' | 'tp' | 'sl' | 'lock';
+  title: string;
+}
+
+/** A fill drawn on the candle that contains `time` (ms). */
+export interface ChartMarker {
+  time: number;
+  side: 'buy' | 'sell';
+  text?: string;
+}
+
+const LEVEL_STYLE: Record<ChartLevel['kind'], { color: string; dashed: boolean }> = {
+  entry: { color: ACCENT, dashed: false },
+  zone: { color: ACCENT, dashed: true },
+  tp: { color: UP, dashed: true },
+  sl: { color: DOWN, dashed: true },
+  lock: { color: UP, dashed: false },
+};
+
 interface PriceChartProps {
   coin: CoinData;
   /** When present, entry / take-profit / stop-loss levels are drawn on the price scale. */
   position?: BotPosition | null;
+  /** Extra levels (a signal's entry zone, stop and target). */
+  levels?: ChartLevel[];
+  markers?: ChartMarker[];
+  /** Candles the caller already holds (scanner cache, launch samples): no network fetch while set. */
+  external?: { candles: Candle[]; label: string } | null;
+  /** How often fetched candles refresh. Paused while the tab is hidden. */
+  refreshMs?: number;
   height?: number;
 }
 
-export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height = 340 }) => {
+export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, levels, markers, external, refreshMs = 15_000, height = 340 }) => {
   const holder = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const linesRef = useRef<IPriceLine[]>([]);
+  const lcRef = useRef<typeof import('lightweight-charts') | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const fitKey = useRef('');
 
   const [timeframe, setTimeframe] = useState<TimeframeId>('5m');
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [source, setSource] = useState<'pool' | 'stream' | 'none'>('none');
+  const [source, setSource] = useState<'pool' | 'stream' | 'external' | 'none'>('none');
   const [loading, setLoading] = useState(true);
   const [hover, setHover] = useState<Candle | null>(null);
   // The chart is created asynchronously, so data that arrives first must wait for it.
@@ -134,6 +166,8 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
         });
       });
 
+      lcRef.current = lc;
+      markersRef.current = lc.createSeriesMarkers(candleSeries, []);
       chartRef.current = chart;
       candleRef.current = candleSeries;
       volumeRef.current = volumeSeries;
@@ -153,6 +187,8 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
       setChartReady(false);
       cleanupResize?.();
       linesRef.current = [];
+      markersRef.current = null;
+      fitKey.current = '';
       chartRef.current?.remove();
       chartRef.current = null;
       candleRef.current = null;
@@ -161,11 +197,15 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
   }, [height]);
 
   /* ------------------------------------------------------------- load candles */
+  const useExternal = !!external;
   useEffect(() => {
+    if (useExternal) return;
     let active = true;
     let timer: ReturnType<typeof setInterval>;
 
-    const load = async () => {
+    const load = async (force = false) => {
+      // A hidden tab spends no chart requests (the scanner shares the same rate limit).
+      if (!force && typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const res = await ChartService.getCandlesForCoin(coin, timeframe);
       if (!active) return;
       setCandles(res.candles);
@@ -175,13 +215,20 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
 
     setLoading(true);
     setCandles([]);
-    load();
-    timer = setInterval(load, 15_000);
+    load(true);
+    timer = setInterval(() => void load(), refreshMs);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [coin.id, coin.chainId, coin.mint, timeframe]);
+  }, [coin.id, coin.chainId, coin.mint, timeframe, useExternal, refreshMs]);
+
+  useEffect(() => {
+    if (!external) return;
+    setCandles(external.candles);
+    setSource('external');
+    setLoading(false);
+  }, [external]);
 
   /* ------------------------------------------------------------- push data */
   useEffect(() => {
@@ -199,42 +246,79 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
         color: c.close >= c.open ? 'rgba(52,211,153,0.35)' : 'rgba(248,113,113,0.35)',
       }))
     );
-    if (candles.length > 0) chartRef.current?.timeScale().fitContent();
+    // Fit once per token / timeframe, so a refresh does not undo the user's zoom.
+    const key = `${coin.id}:${useExternal ? 'x' : timeframe}`;
+    if (candles.length > 0 && fitKey.current !== key) {
+      chartRef.current?.timeScale().fitContent();
+      fitKey.current = key;
+    }
   }, [candles, chartReady]);
 
-  /* ------------------------------------------------------------- position levels */
+  /* ------------------------------------------------------------- levels */
+  const allLevels = useMemo<ChartLevel[]>(() => {
+    const out: ChartLevel[] = [];
+    if (position) {
+      out.push({ price: position.buyPriceUsd, kind: 'entry', title: 'Entry' });
+      out.push({ price: position.tpPriceUsd, kind: 'tp', title: 'TP' });
+      out.push({ price: position.slPriceUsd, kind: position.profitLocked ? 'lock' : 'sl', title: position.profitLocked ? 'Lock' : 'SL' });
+    }
+    return [...out, ...(levels || [])].filter((l) => Number.isFinite(l.price) && l.price > 0);
+  }, [position?.id, position?.buyPriceUsd, position?.tpPriceUsd, position?.slPriceUsd, position?.profitLocked, JSON.stringify(levels || [])]);
+
   useEffect(() => {
     const series = candleRef.current;
-    if (!series) return;
-
+    const lc = lcRef.current;
+    if (!series || !lc) return;
     linesRef.current.forEach((l) => series.removePriceLine(l));
-    linesRef.current = [];
-    if (!position) return;
-
-    const add = (price: number, color: string, title: string, dashed: boolean) => {
-      if (!Number.isFinite(price) || price <= 0) return;
-      import('lightweight-charts').then((lc) => {
-        if (!candleRef.current) return;
-        linesRef.current.push(
-          candleRef.current.createPriceLine({
-            price,
-            color,
-            lineWidth: 1,
-            lineStyle: dashed ? lc.LineStyle.Dashed : lc.LineStyle.Solid,
-            lineVisible: true,
-            axisLabelVisible: true,
-            title,
-            axisLabelColor: color,
-            axisLabelTextColor: SURFACE,
-          })
-        );
+    linesRef.current = allLevels.map((l) => {
+      const style = LEVEL_STYLE[l.kind];
+      return series.createPriceLine({
+        price: l.price,
+        color: style.color,
+        lineWidth: 1,
+        lineStyle: style.dashed ? lc.LineStyle.Dashed : lc.LineStyle.Solid,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title: l.title,
+        axisLabelColor: style.color,
+        axisLabelTextColor: SURFACE,
       });
-    };
+    });
+  }, [allLevels, chartReady]);
 
-    add(position.buyPriceUsd, ACCENT, 'Entry', false);
-    add(position.tpPriceUsd, UP, 'TP', true);
-    add(position.slPriceUsd, DOWN, 'SL', true);
-  }, [position?.id, position?.buyPriceUsd, position?.tpPriceUsd, position?.slPriceUsd, chartReady, candles.length]);
+  /* ------------------------------------------------------------- fill markers */
+  useEffect(() => {
+    const plugin = markersRef.current;
+    if (!plugin) return;
+    if (!markers?.length || candles.length === 0) {
+      plugin.setMarkers([]);
+      return;
+    }
+    const first = candles[0].time;
+    const list = markers
+      .map((m) => {
+        const t = Math.floor(m.time / 1000);
+        if (t < first) return null;
+        // The candle that contains the fill (markers must sit on an existing bar).
+        let bar = candles[candles.length - 1].time;
+        for (let i = candles.length - 1; i >= 0; i--) {
+          if (candles[i].time <= t) {
+            bar = candles[i].time;
+            break;
+          }
+        }
+        return {
+          time: bar as Time,
+          position: m.side === 'buy' ? ('belowBar' as const) : ('aboveBar' as const),
+          shape: m.side === 'buy' ? ('arrowUp' as const) : ('arrowDown' as const),
+          color: m.side === 'buy' ? UP : DOWN,
+          text: m.text || (m.side === 'buy' ? 'Buy' : 'Sell'),
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => !!m)
+      .sort((a, b) => Number(a.time) - Number(b.time));
+    plugin.setMarkers(list);
+  }, [JSON.stringify(markers || []), candles, chartReady]);
 
   /* ------------------------------------------------------------- header stats */
   const shown = hover ?? candles[candles.length - 1] ?? null;
@@ -251,6 +335,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
     <section className="panel overflow-hidden">
       {/* toolbar */}
       <header className="flex flex-wrap items-center gap-3 px-4 py-2.5 border-b border-line">
+        {!useExternal && (
         <div className="tabbar" role="tablist" aria-label="Chart timeframe">
           {TIMEFRAMES.map((t) => (
             <button
@@ -266,10 +351,11 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
             </button>
           ))}
         </div>
+        )}
 
-        <span className="chip" title={source === 'stream' ? 'Built live from the trade stream' : 'Pool candles from GeckoTerminal'}>
-          {source === 'stream' ? <Radio className="w-3 h-3 text-pos" /> : null}
-          {source === 'pool' ? 'Pool data' : source === 'stream' ? 'Live stream' : 'No data'}
+        <span className="chip" title={source === 'stream' ? 'Built live from the trade stream' : source === 'external' ? 'Data the bot already holds - no extra requests' : 'Pool candles from GeckoTerminal'}>
+          {source === 'stream' || source === 'external' ? <Radio className="w-3 h-3 text-pos" /> : null}
+          {source === 'pool' ? 'Pool data' : source === 'stream' ? 'Live stream' : source === 'external' ? external?.label : 'No data'}
         </span>
 
         {/* OHLC readout: values live in text tokens, the swatch carries direction */}
@@ -349,11 +435,11 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
           <span aria-hidden="true" className="w-2.5 h-2.5 rounded-[2px]" style={{ background: DOWN }} />
           Down (filled)
         </span>
-        {position && (
+        {allLevels.length > 0 && (
           <>
             <span className="flex items-center gap-1.5">
               <span aria-hidden="true" className="w-3 h-px" style={{ background: ACCENT }} />
-              Entry
+              {position ? 'Entry' : 'Entry zone'}
             </span>
             <span className="flex items-center gap-1.5">
               <span aria-hidden="true" className="w-3 h-px" style={{ backgroundImage: `linear-gradient(90deg, ${UP} 50%, transparent 50%)`, backgroundSize: '4px 1px' }} />
@@ -366,7 +452,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({ coin, position, height =
           </>
         )}
         <span className="ml-auto">
-          {candles.length} candles · {tfSeconds >= 3600 ? `${tfSeconds / 3600}h` : `${tfSeconds / 60}m`} each
+          {candles.length} candles{useExternal ? '' : ` · ${tfSeconds >= 3600 ? `${tfSeconds / 3600}h` : `${tfSeconds / 60}m`} each`}
         </span>
       </footer>
     </section>

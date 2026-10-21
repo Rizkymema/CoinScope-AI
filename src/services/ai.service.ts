@@ -91,29 +91,9 @@ export const AIService = {
     return { ...data.analysis, source: data.source, note: data.note };
   },
 
-  /** Buy / skip decision used by the bot's AI gate. */
-  async decideSnipe(
-    coin: CoinData,
-    settings: BotSettings,
-    context: { openPositions: number; stats: BotStats }
-  ): Promise<AiDecision> {
-    try {
-      const data = await postJson<{ decision: AiDecision; note?: string }>('/api/ai/decide', { coin, settings, context, model: settings.aiModel }, 50_000);
-      if (data?.note && data.decision) data.decision.reason = `${data.decision.reason} (${data.note})`;
-      return data.decision;
-    } catch (err: any) {
-      return {
-        action: 'skip',
-        confidence: 0,
-        reason: `AI gate unavailable: ${err?.message || 'network error'}`,
-        source: 'heuristic',
-      };
-    }
-  },
-
   /**
-   * Buy / skip review of a scanner signal before the auto-buy. Unlike decideSnipe, a transport
-   * failure returns `null` so the caller can decide whether to trade on the scanner alone.
+   * Buy / skip review of a Ready signal before auto trade buys it. A transport failure comes back
+   * as `available: false` so the caller can decide whether to trade on the scanner alone.
    */
   async decideSignal(
     signal: SignalForGate,

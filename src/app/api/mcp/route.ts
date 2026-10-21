@@ -132,8 +132,20 @@ const handler = createMcpHandler(
       }
     );
 
-    server.registerTool('start_bot', { title: 'Start bot', description: 'Start the auto-snipe bot in the dashboard.', inputSchema: z.object({}) }, async () => viaBridge('start_bot', {}));
-    server.registerTool('stop_bot', { title: 'Pause bot', description: 'Pause the auto-snipe bot (positions stay monitored).', inputSchema: z.object({}) }, async () => viaBridge('stop_bot', {}));
+    server.registerTool(
+      'start_bot',
+      {
+        title: 'Start auto trade',
+        description: 'Switch on auto trade, the one bot: it scans, has Claude review Ready signals and buys the approved ones. Real funds when paperTrading is false - only on explicit user instruction.',
+        inputSchema: z.object({}),
+      },
+      async () => viaBridge('start_bot', {})
+    );
+    server.registerTool(
+      'stop_bot',
+      { title: 'Stop auto trade', description: 'Switch off auto trade. No new entries; open positions stay managed (TP / SL / profit lock).', inputSchema: z.object({}) },
+      async () => viaBridge('stop_bot', {})
+    );
 
     server.registerTool(
       'update_settings',
@@ -165,16 +177,10 @@ const handler = createMcpHandler(
             .boolean()
             .optional()
             .describe('Launch watcher: follow every new Pump.fun token for 30 min and let auto trade buy ones with fast buying, clean RugCheck holder checks and an RSI dip (stop <= 12%, 15-min time stop).'),
-          minLiquidityUsd: z.number().min(0).optional(),
-          maxTokenAgeMinutes: z.number().min(0).optional(),
           maxPositions: z.number().int().min(1).max(50).optional(),
           slippagePercent: z.number().min(0.5).max(50).optional(),
-          minBondingCurvePercent: z.number().min(0).max(100).optional(),
-          targetChain: z.enum(['all', 'solana', 'ethereum', 'base', 'bsc', 'arbitrum']).optional(),
-          launchPlatform: z.enum(['all', 'pumpfun', 'dexscreener']).optional(),
           autoSell: z.boolean().optional(),
           paperTrading: z.boolean().optional(),
-          targetOnlyMode: z.boolean().optional(),
           aiGateEnabled: z.boolean().optional(),
           aiMinConfidence: z.number().min(0).max(100).optional(),
           aiAdjustTargets: z.boolean().optional(),
@@ -224,8 +230,8 @@ const handler = createMcpHandler(
     server.registerTool(
       'manage_targets',
       {
-        title: 'Manage target list',
-        description: 'Add/remove symbols or addresses in the bot whitelist (used with targetOnlyMode).',
+        title: 'Manage watchlist',
+        description: 'Add/remove symbols or addresses on the Market-tab watchlist. It does not change what auto trade buys.',
         inputSchema: z.object({ add: z.array(z.string()).optional(), remove: z.array(z.string()).optional() }),
       },
       async (input) => viaBridge('manage_targets', input)
@@ -244,7 +250,7 @@ const handler = createMcpHandler(
   {
     serverInfo: { name: 'coinscope-ai', version: '1.0.0' },
     instructions:
-      'CoinScope AI memecoin sniper. Market tools (get_new_coins, search_coins, get_token, analyze_token, get_sol_price) work anytime. Bot tools need the CoinScope dashboard open in a browser (the bot + wallet run there). Most new memecoins go to zero - treat every trade as speculative and prefer paper mode until the user explicitly asks for live trading.',
+      'CoinScope AI memecoin auto trader (one bot: scanner + launch watcher + Claude review). Market tools (get_new_coins, search_coins, get_token, analyze_token, get_sol_price) work anytime. Bot tools need the CoinScope dashboard open in a browser (the bot + wallet run there). Most new memecoins go to zero - treat every trade as speculative and prefer paper mode until the user explicitly asks for live trading.',
   }
 );
 

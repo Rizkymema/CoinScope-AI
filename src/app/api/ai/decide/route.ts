@@ -7,16 +7,12 @@ import {
   aiErrorNote,
   isPermanentAiError,
   TRADING_SYSTEM_PROMPT,
-  describeCoin,
   extractText,
   getAnthropic,
   hasAnthropicCredentials,
-  heuristicDecision,
-  heuristicScore,
   modelFor,
   parseJsonObject,
 } from '@/lib/ai-server';
-import type { CoinData } from '@/types/coin';
 import type { AiDecision, BotSettings } from '@/types/bot';
 
 export const runtime = 'nodejs';
@@ -65,22 +61,18 @@ const errorNote = aiErrorNote;
 
 /**
  * POST /api/ai/decide
- *   { coin, settings, context?, model? }   -> { decision }  launch sniper gate (new mints)
- *   { signal, settings, context?, model? } -> { decision }  scanner gate (confirmed setups)
- * Without credentials the sniper gate falls back to the rule-based scorer; the scanner gate
- * answers `available: false` so the caller can trade on the scanner's own checks.
+ *   { signal, settings, context?, model? } -> { decision }  auto trade's review of a Ready signal
+ * Without credentials it answers `available: false` so the caller can trade on the scanner's own checks.
  */
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, 'ai-decide', 120, 60_000);
   if (limited) return limited;
-  let coin: Partial<CoinData> | undefined;
   let signal: Record<string, unknown> | undefined;
   let settings: Partial<BotSettings>;
   let context: Record<string, unknown> | undefined;
   let model: string;
   try {
     const body = await req.json();
-    coin = body?.coin;
     signal = body?.signal;
     settings = body?.settings || {};
     context = body?.context;
@@ -90,57 +82,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (signal) return decideSignal(signal, settings, context, model);
-  if (!coin?.symbol) return NextResponse.json({ error: 'coin.symbol or signal is required' }, { status: 400 });
-
-  const minConfidence = Number(settings.aiMinConfidence) || 60;
-  if (!hasAnthropicCredentials()) {
-    return NextResponse.json({ decision: heuristicDecision(coin, minConfidence) });
-  }
-
-  const baseline = heuristicScore(coin);
-  try {
-    const client = getAnthropic();
-    const response = await client.messages.create(
-      {
-        model,
-        // Thinking is always on and counts toward max_tokens; 1024 left no room for the JSON, so
-        // most answers came back empty and every token was skipped as "unparseable".
-        max_tokens: GATE_MAX_TOKENS,
-        system: TRADING_SYSTEM_PROMPT,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema: DECISION_SCHEMA } },
-        messages: [
-          {
-            role: 'user',
-            content: `The sniper bot wants to buy this token right now. Act as the desk's risk manager: apply the analytical framework and risk doctrine, then decide BUY or SKIP. Confidence is your probability-weighted view that this entry is positive expected value after slippage and fees. Only approve setups with an asymmetric reward/risk profile; skip anything with trap-like liquidity, fading or wash-like flow, or a move that is already parabolic.
-
-Bot parameters: buy size $${settings.buyAmountUsd ?? 0}, default TP +${settings.takeProfitPercent ?? 0}%, default SL -${settings.stopLossPercent ?? 0}%, open positions ${context?.openPositions ?? 'n/a'}/${settings.maxPositions ?? 'n/a'}, paper trading: ${settings.paperTrading ? 'yes' : 'NO - real money'}.
-Recent bot performance: ${JSON.stringify(context?.stats ?? {})}
-
-Token data:
-${JSON.stringify(describeCoin(coin), null, 2)}
-
-Rule-based baseline: score ${baseline.score}/100, risk ${baseline.riskLevel}, flags ${JSON.stringify(baseline.flags)}, positives ${JSON.stringify(baseline.positives)}.
-
-Return the JSON decision. Suggest take_profit_percent / stop_loss_percent that fit this token's structure: thin bonding-curve tokens need wider stops and smaller size, deep graduated pools can use tighter stops; keep reward/risk at least 2:1.`,
-          },
-        ],
-      },
-      { timeout: GATE_TIMEOUT_MS, maxRetries: 0 }
-    );
-
-    if (response.stop_reason === 'refusal') {
-      return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: 'AI declined' });
-    }
-    if (response.stop_reason === 'max_tokens') {
-      return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: 'AI answer cut off' });
-    }
-
-    const parsed = parseJsonObject<Parsed>(extractText(response));
-    if (!parsed) return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: 'Unparseable AI output' });
-    return NextResponse.json({ decision: toDecision(parsed, baseline.riskLevel, response.model) });
-  } catch (error) {
-    return NextResponse.json({ decision: heuristicDecision(coin, minConfidence), note: errorNote(error) });
-  }
+  return NextResponse.json({ error: 'signal is required' }, { status: 400 });
 }
 
 function toDecision(parsed: Parsed, fallbackRisk: AiDecision['riskLevel'], model: string): AiDecision & { sizeFactor?: number } {

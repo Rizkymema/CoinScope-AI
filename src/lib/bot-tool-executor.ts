@@ -16,16 +16,10 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'trailingStopPercent',
   'profitLockTriggerPercent',
   'profitLockPercent',
-  'minLiquidityUsd',
-  'maxTokenAgeMinutes',
   'maxPositions',
   'slippagePercent',
-  'minBondingCurvePercent',
-  'targetChain',
-  'launchPlatform',
   'autoSell',
   'paperTrading',
-  'targetOnlyMode',
   'aiGateEnabled',
   'aiMinConfidence',
   'aiAdjustTargets',
@@ -147,19 +141,36 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
         return ok({ stats: store.getStats(), trades: store.history.slice(0, limit) });
       }
 
+      // start_bot / stop_bot drive the one bot: auto trade.
       case 'start_bot': {
-        if (store.isActive) return ok({ status: 'already running' });
-        store.toggleBot(true);
-        const after = useBotStore.getState();
-        return after.isActive
-          ? ok({ status: 'started', mode: after.settings.paperTrading ? 'paper' : 'live', signer: after.settings.liveSigner })
-          : fail(`Bot did not start: ${after.logs[0]?.message || 'live mode needs a ready signer, or the daily loss limit was reached.'}`);
+        if (store.settings.scannerAutoBuy) return ok({ status: 'already running' });
+        if (!store.settings.paperTrading) {
+          const ready = store.settings.liveSigner === 'bot' ? store.botWallet.unlocked : store.settings.phantomWalletConnected;
+          if (!ready) {
+            return fail(
+              store.settings.liveSigner === 'bot'
+                ? 'Auto trade did not start: live mode and the bot wallet is locked or missing.'
+                : 'Auto trade did not start: live mode and no wallet is connected.'
+            );
+          }
+        }
+        const { useScannerStore } = await import('../store/useScannerStore');
+        useScannerStore.getState().startAutoTrade();
+        const limit = store.settings.dailyLossLimitUsd;
+        const pausedForToday = limit > 0 && store.getTodayRealizedPnl() <= -limit;
+        return ok({
+          status: 'started',
+          mode: store.settings.paperTrading ? 'paper' : 'live',
+          signer: store.settings.liveSigner,
+          ...(pausedForToday ? { note: 'The daily loss limit is already reached: no new entries until tomorrow.' } : {}),
+        });
       }
 
       case 'stop_bot': {
-        if (!store.isActive) return ok({ status: 'already paused' });
-        store.toggleBot(false);
-        return ok({ status: 'paused', openPositions: useBotStore.getState().positions.length });
+        if (!store.settings.scannerAutoBuy) return ok({ status: 'already off' });
+        const { useScannerStore } = await import('../store/useScannerStore');
+        useScannerStore.getState().stopAutoTrade();
+        return ok({ status: 'stopped', openPositions: useBotStore.getState().positions.length, note: 'Open positions are still managed.' });
       }
 
       case 'update_settings': {
@@ -262,7 +273,7 @@ export async function executeBotTool(name: string, input: any): Promise<{ result
       case 'manage_targets': {
         (Array.isArray(input?.add) ? input.add : []).forEach((s: string) => store.addTargetSymbol(String(s)));
         (Array.isArray(input?.remove) ? input.remove : []).forEach((s: string) => store.removeTargetSymbol(String(s)));
-        return ok({ whitelistedSymbols: useBotStore.getState().settings.whitelistedSymbols, targetOnlyMode: store.settings.targetOnlyMode });
+        return ok({ watchlist: useBotStore.getState().settings.whitelistedSymbols, note: 'The watchlist does not change what auto trade buys.' });
       }
 
       case 'dry_run_live_trade': {

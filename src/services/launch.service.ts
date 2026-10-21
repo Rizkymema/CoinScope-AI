@@ -407,6 +407,9 @@ export const LaunchWatcher = {
 
   watchedCount: () => watches.size,
 
+  /** The 10 s price samples of a watched launch (no network call), oldest first; empty if not watched. */
+  samples: (mint: string): { t: number; price: number }[] => [...(watches.get(mint)?.samples || [])],
+
   /** Why launches were dropped in the last 30 minutes, most common first. */
   dropReasons(): { reason: string; count: number }[] {
     const tally = new Map<string, number>();

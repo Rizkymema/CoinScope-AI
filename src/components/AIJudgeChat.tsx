@@ -36,7 +36,7 @@ export const AIJudgeChat: React.FC = () => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const { selectedCoin, aiAnalysis } = useCoinStore();
-  const isBotActive = useBotStore((s) => s.isActive);
+  const isBotActive = useBotStore((s) => s.settings.scannerAutoBuy);
   const positionsCount = useBotStore((s) => s.positions.length);
 
   useEffect(() => {
@@ -213,7 +213,7 @@ export const AIJudgeChat: React.FC = () => {
               <h2 className="font-bold text-white text-[13px]">Trading copilot</h2>
               <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
                 <span className={`dot ${aiUnavailable ? 'dot-warn' : isBotActive ? 'dot-live' : 'dot-idle'}`} />
-                {aiUnavailable ? 'Server API key not set' : `Bot ${isBotActive ? 'running' : 'paused'} · ${positionsCount} open`}
+                {aiUnavailable ? 'Server API key not set' : `Auto trade ${isBotActive ? 'on' : 'off'} · ${positionsCount} open`}
               </p>
             </div>
           </div>
