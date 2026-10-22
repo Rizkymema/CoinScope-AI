@@ -9,6 +9,7 @@ import { BotPosition } from '@/types/bot';
 import { CoinAvatar, ChainBadge } from '../CoinAvatar';
 import { formatPrice, timeAgo } from '@/lib/formatters';
 import { WalletService } from '@/services/wallet.service';
+import { planStage } from '@/lib/exit-plan';
 import { getPriceTrail } from '@/lib/price-trail';
 import { clock, Sparkline, TickingPrice, useNow } from '../desk/shared';
 
@@ -40,7 +41,9 @@ export const BotPositionsTable: React.FC<{ focusKey?: string | null; onFocus?: (
         </h3>
         <span className="text-xs text-slate-500 truncate">
           {settings.autoSell
-            ? `Exits automatic · own TP / SL · profit lock${settings.trailingStopPercent ? ` · trail ${settings.trailingStopPercent}%` : ''}`
+            ? settings.entryStrategy === 'convergence'
+              ? 'Exits automatic · exit plan: staged take-profit, moonbag trail, stop, time stop, emergency exits'
+              : `Exits automatic · own TP / SL · profit lock${settings.trailingStopPercent ? ` · trail ${settings.trailingStopPercent}%` : ''}`
             : 'Automatic exits off'}
         </span>
       </div>
@@ -50,7 +53,9 @@ export const BotPositionsTable: React.FC<{ focusKey?: string | null; onFocus?: (
           <Inbox className="w-7 h-7 text-slate-600 mb-3" />
           <p className="text-white font-semibold text-[13px]">No open positions</p>
           <p className="text-[13px] text-slate-400 mt-1 max-w-sm leading-relaxed">
-            {settings.scannerAutoBuy
+            {settings.scannerAutoBuy && settings.entryStrategy === 'convergence'
+              ? 'Auto trade is waiting for smart wallets to converge on a token that clears all four gates. The pipeline on the right shows where each signal is.'
+              : settings.scannerAutoBuy
               ? `Auto trade is waiting for a Ready signal${readyCount ? ` (${readyCount} ready right now)` : scanning ? ' - scanning now' : ''}. The pipeline on the right shows where each candidate is.`
               : 'Start auto trade and the bot buys the signals it confirms, or buy a Ready signal below or a token from Market.'}
           </p>
@@ -154,15 +159,38 @@ const PositionCard: React.FC<{
         <div className="flex items-center justify-between mt-1.5 text-[11px] font-mono">
           <span className={pos.profitLocked ? 'text-pos flex items-center gap-1' : 'text-neg'}>
             {pos.profitLocked && <Lock className="w-3 h-3" />}
-            {pos.profitLocked ? 'Lock' : 'SL'} {formatPrice(pos.slPriceUsd)} ({toStop.toFixed(1)}%)
+            {pos.exitPlan?.tp2Done ? 'Trail' : pos.profitLocked ? 'Lock' : 'SL'} {formatPrice(pos.slPriceUsd)} ({toStop.toFixed(1)}%)
           </span>
           <span className="text-pos">
-            TP {formatPrice(pos.tpPriceUsd)} (+{toTarget.toFixed(1)}%)
+            {pos.exitPlan ? (pos.exitPlan.tp2Done ? 'High' : pos.exitPlan.tp1Done ? `TP2 ${pos.exitPlan.tp2Multiple}x` : `TP1 ${pos.exitPlan.tp1Multiple}x`) : 'TP'} {formatPrice(pos.tpPriceUsd)} (
+            {toTarget >= 0 ? '+' : ''}
+            {toTarget.toFixed(1)}%)
           </span>
         </div>
       </div>
 
       <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-line flex-wrap">
+        {pos.exitPlan && (
+          <span
+            className="chip chip-accent"
+            title={`Exit plan: ${pos.exitPlan.tp1SellPct}% at ${pos.exitPlan.tp1Multiple}x, ${pos.exitPlan.tp2SellPct}% of the original at ${pos.exitPlan.tp2Multiple}x, moonbag trail ${pos.exitPlan.moonbagTrailPct}%, stop −${pos.exitPlan.stopLossPct}%, time stop ${pos.exitPlan.timeStopMinutes} min without +${pos.exitPlan.timeStopMinGainPct}%. Emergency exit when ${pos.exitPlan.emergencyTriggerSellers} trigger wallets sell over ${Math.round(pos.exitPlan.emergencySellFraction * 100)}%, the dev sells, or liquidity falls ${pos.exitPlan.emergencyLiquidityDropPct}%.`}
+          >
+            {planStage(pos.exitPlan)}
+          </span>
+        )}
+        {pos.exitPlan && pos.exitPlan.exitedWallets.length > 0 && (
+          <span className="chip chip-warn" title="Trigger wallets that sold most of their position">
+            {pos.exitPlan.exitedWallets.length}/{pos.exitPlan.emergencyTriggerSellers} triggers out
+          </span>
+        )}
+        {pos.exitPlan && (
+          <span className={`chip ${now - pos.boughtAt > (pos.exitPlan.timeStopMinutes - 10) * 60_000 ? 'chip-warn' : ''}`} title={`Sold after ${pos.exitPlan.timeStopMinutes} min unless it touched +${pos.exitPlan.timeStopMinGainPct}%`}>
+            <Timer className="w-3 h-3" />
+            {pos.highPriceUsd >= pos.buyPriceUsd * (1 + pos.exitPlan.timeStopMinGainPct / 100)
+              ? 'time stop cleared'
+              : clock(Math.max(0, pos.exitPlan.timeStopMinutes * 60_000 - (now - pos.boughtAt)))}
+          </span>
+        )}
         {timeLeft !== null && (
           <span className={`chip ${timeLeft < 3 * 60_000 ? 'chip-warn' : ''}`} title="Closes if it makes no new high before this runs out">
             <Timer className="w-3 h-3" />

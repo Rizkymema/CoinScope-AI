@@ -31,6 +31,7 @@ const SETTABLE_KEYS: (keyof BotSettings)[] = [
   'smartWallets',
   'scanLaunches',
   'aiModel',
+  'entryStrategy',
 ];
 
 function coinSummary(c: CoinData) {

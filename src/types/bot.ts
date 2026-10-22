@@ -1,4 +1,5 @@
 import { CoinData } from './coin';
+import type { EntryStrategy, ExitPlan } from './convergence';
 
 export type RiskLevel = 'Low' | 'Medium' | 'High' | 'Critical';
 export type ExecutionMode = 'paper' | 'live';
@@ -81,6 +82,11 @@ export interface BotSettings {
    * draw buyers fast, pass the holder checks and dip on RSI (the launch watcher).
    */
   scanLaunches: boolean;
+  /**
+   * What auto trade buys: 'convergence' = the smart-wallet convergence flow (four gates, staged
+   * exits), 'setups' = the chart-setup scanner and launch watcher, 'both' = either.
+   */
+  entryStrategy: EntryStrategy;
 }
 
 export interface BotPosition {
@@ -116,6 +122,10 @@ export interface BotPosition {
   ownerAddress?: string;
   signerKind?: LiveSignerKind;
   aiDecision?: AiDecision;
+  /** Convergence entries: staged take-profit, moonbag trail, stop, time stop and emergency exits. */
+  exitPlan?: ExitPlan;
+  /** Journal entry of the signal that opened the position. */
+  signalId?: string;
   lastPriceUpdateAt?: number;
   priceSource?: 'pumpportal' | 'dexscreener' | 'gecko' | 'pumpfun';
 }
@@ -142,8 +152,9 @@ export interface BotTradeHistory {
   pnlPercent: number;
   boughtAt: number;
   soldAt: number;
-  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'PROFIT_LOCK' | 'TIME_STOP' | 'MANUAL_SELL' | 'AI_SELL';
+  exitReason: 'TP_HIT' | 'SL_HIT' | 'TRAILING_STOP' | 'PROFIT_LOCK' | 'TIME_STOP' | 'MANUAL_SELL' | 'AI_SELL' | 'PARTIAL_TP' | 'EMERGENCY_EXIT';
   isLive: boolean;
+  signalId?: string;
   buyTxSignature?: string;
   sellTxSignature?: string;
 }
@@ -169,6 +180,8 @@ export interface TokenTradeEvent {
   vTokensInBondingCurve?: number;
   pool?: string;
   traderPublicKey?: string;
+  /** Trader's token balance after this trade (UI amount), when the stream sends it. */
+  newTokenBalance?: number;
   signature?: string;
   timestamp: number;
 }

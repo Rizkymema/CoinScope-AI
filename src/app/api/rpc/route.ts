@@ -11,7 +11,9 @@ export const dynamic = 'force-dynamic';
  * uses and rate limited per IP so it cannot be borrowed as a free general-purpose RPC.
  */
 export async function POST(req: NextRequest) {
-  const limited = rateLimit(req, 'rpc', 240, 60_000);
+  // 600/min: the smart-wallet monitor polls up to 50 wallets (one signature list each per ~30 s,
+  // plus one getTransaction per new trade) on top of balances and swaps.
+  const limited = rateLimit(req, 'rpc', 600, 60_000);
   if (limited) return limited;
 
   let body: any;

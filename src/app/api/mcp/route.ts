@@ -173,6 +173,10 @@ const handler = createMcpHandler(
             .max(15)
             .optional()
             .describe('Solana wallets of traders to follow (KOLs, leaderboard accounts); replaces the list. The scanner adds tokens they hold to its candidates and counts them on each signal.'),
+          entryStrategy: z
+            .enum(['convergence', 'setups', 'both'])
+            .optional()
+            .describe("What auto trade buys: 'convergence' = smart-wallet convergence flow (wallets converge -> safety hard gate -> momentum score -> AI ENTRY, staged exits), 'setups' = chart-setup scanner + launch watcher, 'both' = either."),
           scanLaunches: z
             .boolean()
             .optional()

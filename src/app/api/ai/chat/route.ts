@@ -96,6 +96,11 @@ const BOT_TOOLS: Anthropic.Beta.BetaTool[] = [
           type: 'boolean',
           description: 'Let the setup scanner buy Ready signals by itself (score >= 70, sell-back quote passed, within maxPositions and the daily loss limit). Spends real funds when paperTrading is false - only on explicit user instruction.',
         },
+        entryStrategy: {
+          type: 'string',
+          enum: ['convergence', 'setups', 'both'],
+          description: "What auto trade buys: 'convergence' = smart-wallet convergence flow (four gates, staged exits), 'setups' = chart-setup scanner + launch watcher, 'both' = either.",
+        },
         scanLaunches: {
           type: 'boolean',
           description: 'Launch watcher: follow each new Pump.fun token for 30 min; auto trade may buy ones with fast buying, clean RugCheck holder checks and an RSI dip (stop <= 12%, 15-min time stop).',
