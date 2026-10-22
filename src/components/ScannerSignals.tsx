@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, Plus, RefreshCw, Rocket, ShieldCheck, Users, X } from 'lucide-react';
+import { Bell, BellOff, Check, Copy, ExternalLink, Gauge, Loader2, Pause, Play, RefreshCw, Rocket, ShieldCheck, Users } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useScannerStore } from '@/store/useScannerStore';
+import { SmartWalletManager } from './convergence/SmartWalletManager';
 import { useBotStore } from '@/store/useBotStore';
 import { minEntryScore, MOMENTUM_MAX_RSI, ScanSignal, SetupKind } from '@/services/scanner.service';
 import { LAUNCH_TIME_STOP_MINUTES, MIN_LAUNCH_HOLDERS, MIN_LAUNCH_SCORE } from '@/services/launch.service';
-import { isSolanaAddress, MAX_SMART_WALLETS } from '@/services/smartwallet.service';
 import { CoinAvatar } from './CoinAvatar';
 import { formatNumber, formatPrice, timeAgo } from '@/lib/formatters';
 
@@ -160,81 +160,6 @@ export const SignalCard: React.FC<{ signal: ScanSignal }> = ({ signal: s }) => {
   );
 };
 
-export const SmartWallets: React.FC = () => {
-  const { wallets, updateSettings } = useBotStore(useShallow((s) => ({ wallets: s.settings.smartWallets || [], updateSettings: s.updateSettings })));
-  const [draft, setDraft] = useState('');
-  const [note, setNote] = useState<string | null>(null);
-
-  const add = () => {
-    const found = draft.split(/[\s,]+/).filter(Boolean);
-    const bad = found.find((a) => !isSolanaAddress(a));
-    if (bad) {
-      setNote(`Not a Solana wallet address: ${bad}`);
-      return;
-    }
-    const merged = [...new Set([...wallets, ...found])];
-    updateSettings({ smartWallets: merged.slice(0, MAX_SMART_WALLETS) });
-    setDraft('');
-    setNote(merged.length > MAX_SMART_WALLETS ? `Tracking the first ${MAX_SMART_WALLETS}; remove one to add another.` : null);
-  };
-
-  return (
-    <details className="panel overflow-hidden">
-      <summary className="px-4 py-3 text-[13px] font-bold text-white cursor-pointer select-none">
-        Smart wallets <span className="text-slate-500 font-normal">({wallets.length}) — optional</span>
-      </summary>
-      <div className="border-t border-line px-4 py-3 space-y-3">
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Wallets of traders worth following: KOLs, or accounts with steady PnL on the GMGN, Axiom or kolscan leaderboards. Tokens they hold join the scan
-          (two of them must hold it once you track three or more), and each card shows how many still hold it. A holding is a lead, not a buy: the token still
-          has to pass every gate and show a Ready setup.
-        </p>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            add();
-          }}
-        >
-          <input
-            type="text"
-            className="field font-mono text-xs flex-1 min-w-0"
-            placeholder="Wallet address (paste several separated by spaces)"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <button type="submit" className="btn btn-secondary shrink-0" disabled={!draft.trim() || wallets.length >= MAX_SMART_WALLETS}>
-            <Plus className="w-3.5 h-3.5" />
-            Add
-          </button>
-        </form>
-        {note && <p className="text-xs text-warn">{note}</p>}
-        {wallets.length > 0 && (
-          <ul>
-            {wallets.map((w) => (
-              <li key={w} className="row flex items-center gap-2 py-1.5 text-xs">
-                <span className="font-mono text-slate-300 truncate flex-1 min-w-0">{w}</span>
-                <a href={`https://gmgn.ai/sol/address/${w}`} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" title="PnL and recent trades on GMGN">
-                  PnL
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  title="Stop tracking this wallet"
-                  onClick={() => updateSettings({ smartWallets: wallets.filter((x) => x !== w) })}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </details>
-  );
-};
-
 /** New launches the launch watcher is streaming: confirmed dips first, then the ones worth watching. */
 const LaunchSignals: React.FC = () => {
   const { launches, launchWatched, enabled } = useScannerStore(useShallow((s) => ({ launches: s.launches, launchWatched: s.launchWatched, enabled: s.enabled })));
@@ -381,7 +306,8 @@ export const ScannerSignals: React.FC = () => {
         </details>
       )}
 
-      <SmartWallets />
+      {/* With the convergence flow on, the wallet list is shown in its own section above. */}
+      {settings.entryStrategy === 'setups' && <SmartWalletManager />}
     </section>
   );
 };

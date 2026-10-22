@@ -16,6 +16,8 @@ const EXIT_LABEL: Record<string, string> = {
   TIME_STOP: 'Time stop',
   MANUAL_SELL: 'Manual',
   AI_SELL: 'AI',
+  PARTIAL_TP: 'Take profit (part)',
+  EMERGENCY_EXIT: 'Emergency exit',
 };
 
 export const BotTradeHistory: React.FC = () => {

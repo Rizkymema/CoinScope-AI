@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Bot, Brain, Check, ChevronDown, DollarSign, Play, Square, Wallet } from 'lucide-react';
+import { AlertTriangle, Bot, Brain, Check, ChevronDown, DollarSign, Percent, Play, Square, Wallet } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
 import { useScannerStore } from '@/store/useScannerStore';
@@ -16,6 +16,18 @@ import { BotTradeHistory } from './bot/BotTradeHistory';
 import { FocusChart, FocusKey } from './desk/FocusChart';
 import { PipelinePanel } from './desk/PipelinePanel';
 import { PnlCurve } from './desk/PnlCurve';
+import { ConvergencePanel } from './convergence/ConvergencePanel';
+import { SmartWalletManager } from './convergence/SmartWalletManager';
+import { SignalJournal } from './convergence/SignalJournal';
+import { ConvergenceSettings } from './convergence/ConvergenceSettings';
+import { useConvergenceLive, useConvergenceStore, tradingCapitalUsd } from '@/store/useConvergenceStore';
+import type { EntryStrategy } from '@/types/convergence';
+
+const STRATEGIES: { id: EntryStrategy; label: string; hint: string }[] = [
+  { id: 'convergence', label: 'Smart-wallet convergence', hint: 'Smart wallets converge → safety → momentum → AI, staged exits' },
+  { id: 'setups', label: 'Chart setups', hint: 'Setup scanner and launch watcher, signal stop and target' },
+  { id: 'both', label: 'Both', hint: 'Either flow may enter' },
+];
 
 /** Lets any page jump to a header tab (the tab state lives in page.tsx). */
 export const goToTab = (tab: 'trending' | 'new' | 'auto' | 'settings') => window.dispatchEvent(new CustomEvent('coinscope:tab', { detail: tab }));
@@ -68,6 +80,19 @@ export const AutoTradePage: React.FC = () => {
     }))
   );
 
+  const { cfg, setConfig, walletCount, convWatching } = useConvergenceStore(
+    useShallow((s) => ({
+      cfg: s.config,
+      setConfig: s.setConfig,
+      walletCount: s.wallets.filter((w) => w.active).length,
+      convWatching: s.journal.filter((j) => j.status === 'watch').length,
+    }))
+  );
+  const monitorRunning = useConvergenceLive((s) => !!s.monitor?.running);
+  const strategy = settings.entryStrategy;
+  const conv = strategy !== 'setups';
+  const setups = strategy !== 'convergence';
+
   const [aiKey, setAiKey] = useState<{ configured: boolean } | null>(null);
   useEffect(() => {
     fetch('/api/ai/decide')
@@ -101,7 +126,9 @@ export const AutoTradePage: React.FC = () => {
   const aiOn = settings.aiGateEnabled;
   const aiReady = !aiOn || aiKey?.configured !== false;
   const todayPnl = getTodayRealizedPnl();
-  const lossLimitHit = settings.dailyLossLimitUsd > 0 && todayPnl <= -settings.dailyLossLimitUsd;
+  const capitalUsd = tradingCapitalUsd();
+  const convLossHit = conv && cfg.dailyLossPct > 0 && capitalUsd > 0 && todayPnl <= -(capitalUsd * cfg.dailyLossPct) / 100;
+  const lossLimitHit = (settings.dailyLossLimitUsd > 0 && todayPnl <= -settings.dailyLossLimitUsd) || convLossHit;
   // The daily loss limit pauses entries for the rest of the day; it does not switch the bot off.
   const pausedToday = running && lossLimitHit;
   const canStart = signerReady;
@@ -114,12 +141,14 @@ export const AutoTradePage: React.FC = () => {
       stopAutoTrade();
       return;
     }
+    const convText = `smart-wallet convergence signals that pass the safety gate, score ≥ ${cfg.aiScore} and get an AI ENTRY ≥ ${cfg.aiMinConfidence}% are bought with ${cfg.positionPct}% of the trading capital (~$${((capitalUsd * cfg.positionPct) / 100).toFixed(2)}) and exited by the plan (${cfg.tp1Multiple}x / ${cfg.tp2Multiple}x, stop −${cfg.stopLossPct}%)`;
+    const setupText = `Ready setup signals (score ≥ ${minEntryScore(settings.scannerMode)}) that pass the sell-back test${aiOn ? ' and Claude approves' : ''} are bought for up to $${settings.buyAmountUsd}`;
     if (
       live &&
       !window.confirm(
-        `Auto trade will spend real SOL: up to $${settings.buyAmountUsd} per entry, at most ${settings.maxPositions} open positions, only on Ready signals (score ≥ ${minEntryScore(
-          settings.scannerMode
-        )}) that pass the sell-back test${aiOn ? ' and Claude approves' : ''}. It stops opening positions for the day after $${settings.dailyLossLimitUsd} of losses. Turn it on?`
+        `Auto trade will spend real SOL: ${strategy === 'convergence' ? convText : strategy === 'setups' ? setupText : `${convText}; and ${setupText}`}. At most ${
+          settings.maxPositions
+        } open positions; no new entries for the day after $${settings.dailyLossLimitUsd}${conv ? ` or ${cfg.dailyLossPct}% of capital` : ''} of losses. Turn it on?`
       )
     ) {
       return;
@@ -149,22 +178,57 @@ export const AutoTradePage: React.FC = () => {
                 </span>
                 <span className={live ? 'chip chip-neg' : 'chip chip-warn'}>{live ? 'Live funds' : 'Paper'}</span>
               </div>
+              {conv && (
+                <p className="text-[13px] text-slate-400 mt-1.5 max-w-2xl leading-relaxed">
+                  The bot enters only after four gates in order: smart wallets from different clusters buy the same token ({cfg.triggerPoints} points in{' '}
+                  {cfg.windowMinutes} min), the safety hard gate, a momentum score of {cfg.aiScore}+ and an AI verdict of ENTRY ≥ {cfg.aiMinConfidence}%. Exits run on
+                  their own: sell {cfg.tp1SellPct}% at {cfg.tp1Multiple}x, {cfg.tp2SellPct}% at {cfg.tp2Multiple}x, the rest trails {cfg.moonbagTrailPct}%; stop −
+                  {cfg.stopLossPct}%, time stop {cfg.timeStopMinutes} min.
+                  {strategy === 'both' ? ' The chart-setup scanner may enter too.' : ''}
+                </p>
+              )}
+              {setups && strategy !== 'both' && (
               <p className="text-[13px] text-slate-400 mt-1.5 max-w-2xl leading-relaxed">
                 Every minute the scanner checks Solana tokens for safety and a confirmed chart setup
                 {settings.scanLaunches ? ', and new Pump.fun launches are followed for their first 30 minutes until buyers pile in and RSI dips' : ''}. Each Ready
                 signal{aiOn ? ' is reviewed by Claude, and the approved ones are' : ' is'} bought with the signal&apos;s stop and target, then managed with
                 take-profit, stop-loss and profit lock until it closes.
               </p>
+              )}
+              <div className="flex items-center gap-1 flex-wrap mt-2.5" role="radiogroup" aria-label="Entry strategy">
+                {STRATEGIES.map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={strategy === st.id}
+                    title={st.hint}
+                    onClick={() => updateSettings({ entryStrategy: st.id })}
+                    className={`btn btn-sm ${strategy === st.id ? 'btn-secondary text-signal' : 'btn-ghost'}`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
               <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
-                <span className="chip" title="Scanner heartbeat">
-                  <span className={`dot ${enabled ? 'dot-live' : 'dot-idle'}`} />
-                  {scanning ? 'Scanning…' : lastScanAt ? `Scanned ${timeAgo(lastScanAt)} · ${candidateCount} tokens` : enabled ? 'Starting…' : 'Scanner paused'}
-                </span>
+                {conv && (
+                  <span className="chip" title="Smart-wallet monitor">
+                    <span className={`dot ${monitorRunning ? 'dot-live' : 'dot-idle'}`} />
+                    {monitorRunning ? `Watching ${walletCount} wallets` : `${walletCount} wallets · monitor off`}
+                  </span>
+                )}
+                {setups && (
+                  <span className="chip" title="Scanner heartbeat">
+                    <span className={`dot ${enabled ? 'dot-live' : 'dot-idle'}`} />
+                    {scanning ? 'Scanning…' : lastScanAt ? `Scanned ${timeAgo(lastScanAt)} · ${candidateCount} tokens` : enabled ? 'Starting…' : 'Scanner paused'}
+                  </span>
+                )}
                 <span className="chip">
                   <Brain className={`w-3 h-3 ${aiOn ? 'text-signal' : 'text-slate-500'}`} />
                   {aiOn ? aiModelLabel(settings.aiModel) : 'AI review off'}
                 </span>
-                <span className="chip">{readyCount} ready</span>
+                {conv && <span className="chip">{convWatching} on watchlist</span>}
+                {setups && <span className="chip">{readyCount} ready</span>}
                 <span className="chip">
                   {positions.length}/{settings.maxPositions} open
                 </span>
@@ -195,6 +259,12 @@ export const AutoTradePage: React.FC = () => {
                 </>
               )}
             </button>
+            {conv && walletCount === 0 && (
+              <p className="text-[11px] text-warn mt-2 flex items-center gap-1.5 lg:justify-end">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Add smart wallets below - convergence has nothing to watch yet.
+              </p>
+            )}
             {lossLimitHit && (
               <p className="text-[11px] text-warn mt-2 flex items-center gap-1.5 lg:justify-end">
                 <AlertTriangle className="w-3.5 h-3.5" />
@@ -229,6 +299,45 @@ export const AutoTradePage: React.FC = () => {
           </Step>
 
           <Step n={2} title="Size" ok={settings.buyAmountUsd > 0 && settings.maxPositions > 0}>
+            {conv && (
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                <label className="min-w-0">
+                  <span className="label">Per signal</span>
+                  <span className="relative block">
+                    <Percent className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={10}
+                      step={0.1}
+                      className="field pr-7 font-mono"
+                      value={cfg.positionPct}
+                      onChange={(e) => setConfig({ positionPct: Math.max(0.1, Math.min(10, Number(e.target.value) || 0.1)) })}
+                    />
+                  </span>
+                </label>
+                <label className="min-w-0">
+                  <span className="label">Day loss limit</span>
+                  <span className="relative block">
+                    <Percent className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      step={0.5}
+                      className="field pr-7 font-mono"
+                      value={cfg.dailyLossPct}
+                      onChange={(e) => setConfig({ dailyLossPct: Math.max(0, Number(e.target.value) || 0) })}
+                    />
+                  </span>
+                </label>
+                <div className="min-w-0">
+                  <span className="label">Now</span>
+                  <p className="text-[13px] font-mono text-slate-200 pt-1.5">${((capitalUsd * cfg.positionPct) / 100).toFixed(2)}</p>
+                </div>
+              </div>
+            )}
+            {setups && (
             <div className="grid grid-cols-3 gap-2">
               <label className="min-w-0">
                 <span className="label">Per trade</span>
@@ -268,8 +377,27 @@ export const AutoTradePage: React.FC = () => {
                 </span>
               </label>
             </div>
+            )}
+            {!setups && (
+              <label className="min-w-0 block mt-2">
+                <span className="label">Max open positions</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="field font-mono"
+                  value={settings.maxPositions}
+                  onChange={(e) => updateSettings({ maxPositions: Math.max(1, Number(e.target.value)) })}
+                />
+              </label>
+            )}
             <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
-              Stops and targets come from each signal (stop ≤ 12%, reward above risk after fees). Profit lock arms half way to each target (at most +{settings.profitLockTriggerPercent}%) and keeps at least +3%, so a trade that got that far closes green.
+              {conv
+                ? `Convergence entries: ${cfg.positionPct}% of the trading capital ($${capitalUsd.toFixed(2)}), equal size every time, never averaging down; entries are cancelled over ${cfg.maxPriceImpactPct}% price impact or after a +${cfg.maxChaseUpPct}% run since the signal.`
+                : ''}
+              {setups
+                ? ` Setup entries: stops and targets come from each signal (stop ≤ 12%, reward above risk after fees). Profit lock arms half way to each target (at most +${settings.profitLockTriggerPercent}%) and keeps at least +3%.`
+                : ''}
             </p>
           </Step>
 
@@ -293,6 +421,14 @@ export const AutoTradePage: React.FC = () => {
                 <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-150 ${aiOn ? 'translate-x-4' : ''}`} />
               </button>
             </div>
+            {conv && (
+              <p className={`text-[11px] mt-2 leading-relaxed ${aiKey && !aiKey.configured && cfg.requireAi ? 'text-neg' : 'text-slate-500'}`}>
+                Convergence: Claude checks every token that scores {cfg.aiScore}+; only ENTRY ≥ {cfg.aiMinConfidence}% is bought
+                {cfg.requireAi ? ' (required - no key, no entries).' : ` (without an answer, momentum ≥ ${cfg.noAiMinScore} may enter).`}
+                {setups ? ' The switch applies to the setup scanner:' : ''}
+              </p>
+            )}
+            {setups && (
             <p className={`text-[11px] mt-2 leading-relaxed ${aiReady ? 'text-slate-500' : 'text-neg'}`}>
               {!aiOn
                 ? 'Off: the scanner buys on its own checks.'
@@ -302,6 +438,7 @@ export const AutoTradePage: React.FC = () => {
                 ? `Claude reviews every Ready signal against the entry rules; buys need ≥ ${settings.aiMinConfidence}% confidence. If Claude cannot answer, paper mode enters at half size and live mode retries next scan.`
                 : 'No ANTHROPIC_API_KEY on the server — entries use the scanner checks alone until it is set.'}
             </p>
+            )}
           </Step>
         </div>
         )}
@@ -330,7 +467,10 @@ export const AutoTradePage: React.FC = () => {
         <div className="xl:col-span-2 min-w-0">
           <FocusChart focusKey={focusKey} onFocus={setFocusKey} />
         </div>
-        <PipelinePanel />
+        <div className="space-y-4 min-w-0">
+          {conv && <ConvergencePanel />}
+          {setups && <PipelinePanel />}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
@@ -340,7 +480,15 @@ export const AutoTradePage: React.FC = () => {
         <BotTerminalLogs />
       </div>
 
-      <ScannerSignals />
+      {conv && (
+        <>
+          <SmartWalletManager />
+          <SignalJournal />
+          <ConvergenceSettings />
+        </>
+      )}
+
+      {setups && <ScannerSignals />}
 
       <PnlCurve />
       <BotTradeHistory />

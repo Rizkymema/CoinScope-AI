@@ -74,16 +74,24 @@ function getProvider(preferred?: WalletProviderType): { provider: SolanaProvider
 /** Network / HTTP failure, as opposed to the RPC node answering with an error about the request. */
 class RpcTransportError extends Error {}
 
+/** A request that hangs must not stall its caller (the smart-wallet monitor waits on each call). */
+const RPC_TIMEOUT_MS = 20_000;
+
 async function rpcOnce<T>(url: string, method: string, params: unknown[]): Promise<T> {
   let response: Response;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), RPC_TIMEOUT_MS);
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: ctrl.signal,
     });
   } catch (err: any) {
-    throw new RpcTransportError(`RPC ${method} unreachable: ${err?.message || 'network error'}`);
+    throw new RpcTransportError(`RPC ${method} unreachable: ${err?.name === 'AbortError' ? 'timed out' : err?.message || 'network error'}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!response.ok) throw new RpcTransportError(`RPC ${method} failed with HTTP ${response.status}`);
   const data = await response.json().catch(() => null);

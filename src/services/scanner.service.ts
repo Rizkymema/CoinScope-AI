@@ -16,7 +16,7 @@ import type { Candle } from './chart.service';
 import { mapPairToCoinData } from './coin.service';
 import { SmartWalletService } from './smartwallet.service';
 
-const GECKO = 'https://api.geckoterminal.com/api/v2/networks/solana';
+export const GECKO = 'https://api.geckoterminal.com/api/v2/networks/solana';
 const GECKO_HEADERS = { Accept: 'application/json;version=20230302' };
 const DEX = 'https://api.dexscreener.com';
 const RUGCHECK = 'https://api.rugcheck.xyz/v1/tokens';
@@ -395,8 +395,11 @@ export function cachedCandles(mint: string): { candles: Candle[]; at: number } |
   return hit ? { candles: hit.candles, at: hit.at } : null;
 }
 
+/** False while GeckoTerminal is in its rate-limit pause (shared by every caller in the app). */
+export const geckoAvailable = () => Date.now() >= geckoCooldownUntil;
+
 /** GeckoTerminal GET that starts the rate-limit pause on a 429 instead of retrying into it. */
-async function geckoJson(url: string): Promise<any | null> {
+export async function geckoJson(url: string): Promise<any | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {

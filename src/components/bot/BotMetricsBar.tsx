@@ -4,6 +4,7 @@ import React from 'react';
 import { RotateCcw } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBotStore } from '@/store/useBotStore';
+import { useConvergenceStore } from '@/store/useConvergenceStore';
 import { aiModelLabel } from '@/lib/ai-models';
 
 const Stat: React.FC<{
@@ -30,6 +31,7 @@ const Stat: React.FC<{
 );
 
 export const BotMetricsBar: React.FC = () => {
+  const convCfg = useConvergenceStore((s) => s.config);
   const { settings, walletBalance, positions, resetWallet, getStats, botSol } = useBotStore(
     useShallow((s) => ({
       botSol: s.botWallet.solBalance,
@@ -76,13 +78,25 @@ export const BotMetricsBar: React.FC = () => {
       <Stat
         label="Open positions"
         value={`${positions.length} / ${settings.maxPositions}`}
-        hint={settings.autoSell ? `Profit lock +${settings.profitLockTriggerPercent}% → +${settings.profitLockPercent}%` : 'Auto-sell off'}
+        hint={
+          !settings.autoSell
+            ? 'Auto-sell off'
+            : settings.entryStrategy === 'convergence'
+            ? `Exit plan ${convCfg.tp1Multiple}x / ${convCfg.tp2Multiple}x · SL −${convCfg.stopLossPct}%`
+            : `Profit lock +${settings.profitLockTriggerPercent}% → +${settings.profitLockPercent}%`
+        }
       />
       <Stat label="Win rate" value={`${stats.winRate.toFixed(0)}%`} hint={`${stats.winningTrades}W · ${stats.losingTrades}L`} />
       <Stat
         label="AI review"
-        value={settings.aiGateEnabled ? aiModelLabel(settings.aiModel).replace('Claude ', '') : 'Off'}
-        hint={settings.aiGateEnabled ? `Buys need ≥ ${settings.aiMinConfidence}% confidence` : 'Scanner decides alone'}
+        value={settings.aiGateEnabled || settings.entryStrategy !== 'setups' ? aiModelLabel(settings.aiModel).replace('Claude ', '') : 'Off'}
+        hint={
+          settings.entryStrategy === 'convergence'
+            ? `ENTRY needs ≥ ${convCfg.aiMinConfidence}% confidence`
+            : settings.aiGateEnabled
+            ? `Buys need ≥ ${settings.aiMinConfidence}% confidence`
+            : 'Scanner decides alone'
+        }
       />
     </div>
   );

@@ -25,6 +25,8 @@ import { PumpFunService } from '../services/pumpfun.service';
 import { BridgeService } from '../services/bridge.service';
 import { DEFAULT_AI_MODEL, resolveAiModel } from '../lib/ai-models';
 import { recordPriceTrail } from '../lib/price-trail';
+import { planExit, planLevels } from '../lib/exit-plan';
+import type { ExitPlan } from '../types/convergence';
 
 type ExitReason = BotTradeHistory['exitReason'];
 
@@ -33,6 +35,17 @@ export interface BotToast {
   description: string;
   type: 'buy' | 'sell_tp' | 'sell_sl' | 'info' | 'error';
   coinSymbol?: string;
+}
+
+export interface EntryTargets {
+  tp: number;
+  sl: number;
+  timeStopMinutes?: number;
+  exitPlan?: ExitPlan;
+  signalId?: string;
+  /** Slippage cap for this entry, in %; the lower of it and the setting is used. */
+  maxSlippagePercent?: number;
+  decision?: AiDecision;
 }
 
 interface BotState {
@@ -63,14 +76,21 @@ interface BotState {
 
   // feed + execution
   ingestCoins: (coins: CoinData[], origin?: 'stream' | 'feed') => void;
-  /** `targets` overrides the settings' TP / SL percentages for this one position (scanner signals). */
+  /**
+   * `targets` overrides the settings' TP / SL percentages for this one position (scanner signals);
+   * an `exitPlan` (convergence entries) replaces TP / SL / profit lock with the staged exits.
+   */
   manualSnipeCoin: (
     coin: CoinData,
     amountUsd?: number,
     reason?: string,
-    targets?: { tp: number; sl: number; timeStopMinutes?: number }
-  ) => Promise<{ success: boolean; message: string }>;
+    targets?: EntryTargets
+  ) => Promise<{ success: boolean; message: string; positionId?: string }>;
   closePosition: (positionId: string, exitReason: ExitReason, percent?: number) => Promise<{ success: boolean; message: string }>;
+  /** Sells all of a position at once (convergence emergency exits). */
+  emergencyExit: (positionId: string, why: string) => Promise<{ success: boolean; message: string }>;
+  /** Updates the exit plan of an open position (stages done, wallets that exited). */
+  patchExitPlan: (positionId: string, patch: Partial<ExitPlan>) => void;
   setPositionTargets: (positionId: string, tpPercent?: number, slPercent?: number) => boolean;
   updatePositionsWithLatestCoins: (coins: CoinData[]) => void;
   applyTradeTick: (trade: TokenTradeEvent) => void;
@@ -131,6 +151,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   scannerMode: 'strict',
   smartWallets: [],
   scanLaunches: true,
+  entryStrategy: 'convergence',
 };
 
 /** Liquid Solana token used by the live-pipeline test when the scanner has nothing yet. */
@@ -151,6 +172,8 @@ const PRICE_POLL_MS = 6_000;
 const WALLET_REFRESH_MS = 30_000;
 
 let booted = false;
+/** Set when a saved session had auto trade on before entry strategies existed (logged at boot). */
+let strategyMigrated = false;
 let pricePollTimer: ReturnType<typeof setInterval> | null = null;
 let walletTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -288,6 +311,14 @@ export const useBotStore = create<BotState>()(
 
         // MCP bridge: lets external AI clients (Claude Desktop, Cursor, ...) read state and control the bot.
         BridgeService.start();
+
+        if (strategyMigrated) {
+          strategyMigrated = false;
+          get().log(
+            'warning',
+            'Update: auto trade now has an entry strategy (default: smart-wallet convergence). It was switched off once - pick the strategy on the Auto Trade tab and press Start again.'
+          );
+        }
       },
 
       updateSettings: (newSettings) => {
@@ -362,6 +393,10 @@ export const useBotStore = create<BotState>()(
             tp: targets?.tp ?? settings.takeProfitPercent,
             sl: targets?.sl ?? settings.stopLossPercent,
             timeStopMinutes: targets?.timeStopMinutes,
+            exitPlan: targets?.exitPlan,
+            signalId: targets?.signalId,
+            maxSlippagePercent: targets?.maxSlippagePercent,
+            decision: targets?.decision,
             reason,
           });
         } finally {
@@ -374,7 +409,8 @@ export const useBotStore = create<BotState>()(
         const pos = state.positions.find((p) => p.id === positionId);
         if (!pos) return { success: false, message: 'Position not found.' };
         if (state.pendingTradeIds.includes(pos.id)) return { success: false, message: 'A sell is already in progress for this position.' };
-        const pct = Math.max(1, Math.min(100, percent));
+        // Whole percent, like TradeService.executeSell, so the books match what was sold on-chain.
+        const pct = Math.max(1, Math.min(100, Math.round(percent)));
 
         set((s) => ({ pendingTradeIds: [...s.pendingTradeIds, pos.id] }));
         try {
@@ -443,18 +479,21 @@ export const useBotStore = create<BotState>()(
             isLive: pos.isLive,
             buyTxSignature: pos.buyTxSignature,
             sellTxSignature: sellTx,
+            signalId: pos.signalId,
           };
 
+          // Built from the latest state: exit-plan updates made while the sell was in flight survive.
+          const latest = get().positions.find((p) => p.id === pos.id) || pos;
           const remaining = pct >= 100 ? null : {
-            ...pos,
+            ...latest,
             tokensBought: pos.tokensBought - soldTokens,
             amountUsd: pos.amountUsd - costBasis,
             tokenAmountRaw: pos.tokenAmountRaw ? ((BigInt(pos.tokenAmountRaw) * BigInt(100 - pct)) / BigInt(100)).toString() : pos.tokenAmountRaw,
           };
 
           if (get().settings.soundAlerts) {
-            if (exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK') AudioService.playTakeProfitSound();
-            else if (exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP') AudioService.playStopLossSound();
+            if (exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK' || exitReason === 'PARTIAL_TP') AudioService.playTakeProfitSound();
+            else if (exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' || exitReason === 'EMERGENCY_EXIT') AudioService.playStopLossSound();
           }
 
           const sign = pnlUsd >= 0 ? '+' : '';
@@ -471,22 +510,33 @@ export const useBotStore = create<BotState>()(
               ? 'TIME STOP'
               : exitReason === 'AI_SELL'
               ? 'AI SELL'
+              : exitReason === 'PARTIAL_TP'
+              ? 'PARTIAL TAKE PROFIT'
+              : exitReason === 'EMERGENCY_EXIT'
+              ? 'EMERGENCY EXIT'
               : 'MANUAL SELL';
 
           set((s) => ({
             walletBalance: pos.isLive ? s.walletBalance : s.walletBalance + proceedsUsd,
-            positions: remaining ? s.positions.map((p) => (p.id === pos.id ? remaining : p)) : s.positions.filter((p) => p.id !== pos.id),
+            positions: remaining
+              ? s.positions.map((p) => (p.id === pos.id ? { ...remaining, exitPlan: p.exitPlan ?? remaining.exitPlan } : p))
+              : s.positions.filter((p) => p.id !== pos.id),
             history: [trade, ...s.history].slice(0, 500),
             latestToastNotification: {
               title: `${label}: ${pos.coin.symbol}`,
               description: `${pct}% sold for $${proceedsUsd.toFixed(2)} (${sign}${pnlPercent.toFixed(1)}%)${sellTx ? ' - tx ' + sellTx.slice(0, 8) : ''}`,
-              type: exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK' ? 'sell_tp' : exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' ? 'sell_sl' : 'info',
+              type:
+                exitReason === 'TP_HIT' || exitReason === 'PROFIT_LOCK' || exitReason === 'PARTIAL_TP'
+                  ? 'sell_tp'
+                  : exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' || exitReason === 'EMERGENCY_EXIT'
+                  ? 'sell_sl'
+                  : 'info',
               coinSymbol: pos.coin.symbol,
             },
           }));
 
           get().log(
-            exitReason === 'TP_HIT' ? 'sell' : exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' ? 'warning' : 'sell',
+            exitReason === 'SL_HIT' || exitReason === 'TRAILING_STOP' || exitReason === 'EMERGENCY_EXIT' ? 'warning' : 'sell',
             `[${label}] ${pos.isLive ? 'LIVE ' : ''}Sold ${pct}% of ${pos.coin.symbol} @ $${sellPriceUsd.toPrecision(4)} -> $${proceedsUsd.toFixed(2)} (${sign}${pnlPercent.toFixed(1)}%, ${sign}$${pnlUsd.toFixed(2)})`,
             { coinSymbol: pos.coin.symbol, chainId: pos.coin.chainId, txSignature: sellTx }
           );
@@ -505,9 +555,40 @@ export const useBotStore = create<BotState>()(
         }
       },
 
+      emergencyExit: async (positionId, why) => {
+        const pos = get().positions.find((p) => p.id === positionId);
+        if (!pos) return { success: false, message: 'Position not found.' };
+        // Recorded on the plan first: if this sell cannot run now (another sell in flight, a locked
+        // wallet, a failed transaction), every later tick retries it until the position is closed.
+        if (pos.exitPlan && !pos.exitPlan.emergency) get().patchExitPlan(positionId, { emergency: why });
+        if (!pos.exitPlan?.emergency) get().log('warning', `[EMERGENCY EXIT] ${pos.coin.symbol}: ${why}`, { coinSymbol: pos.coin.symbol });
+        if (get().pendingTradeIds.includes(positionId)) return { success: false, message: 'A sell is in flight - the emergency exit follows it.' };
+        if ((exitRetryAt.get(positionId) || 0) > Date.now()) return { success: false, message: 'Exit retry pending.' };
+        const r = await get().closePosition(positionId, 'EMERGENCY_EXIT');
+        if (r.success) exitRetryAt.delete(positionId);
+        else exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS);
+        return r;
+      },
+
+      patchExitPlan: (positionId, patch) => {
+        set((s) => ({
+          positions: s.positions.map((p) => {
+            if (p.id !== positionId || !p.exitPlan) return p;
+            const exitPlan = { ...p.exitPlan, ...patch };
+            // The card's stop and next target follow the stage at once, not on the next tick.
+            const levels = planLevels({ buyPriceUsd: p.buyPriceUsd, highPriceUsd: p.highPriceUsd, boughtAt: p.boughtAt, exitPlan }, p.currentPriceUsd || p.buyPriceUsd);
+            return { ...p, exitPlan, ...levels };
+          }),
+        }));
+      },
+
       setPositionTargets: (positionId, tpPercent, slPercent) => {
         const pos = get().positions.find((p) => p.id === positionId);
         if (!pos) return false;
+        if (pos.exitPlan) {
+          get().log('info', `${pos.coin.symbol} follows its convergence exit plan; change the exits under Convergence thresholds.`, { coinSymbol: pos.coin.symbol });
+          return false;
+        }
         const tpPriceUsd = tpPercent ? pos.buyPriceUsd * (1 + tpPercent / 100) : pos.tpPriceUsd;
         const slPriceUsd = slPercent ? pos.buyPriceUsd * (1 - slPercent / 100) : pos.slPriceUsd;
         set((s) => ({ positions: s.positions.map((p) => (p.id === positionId ? { ...p, tpPriceUsd, slPriceUsd } : p)) }));
@@ -535,7 +616,9 @@ export const useBotStore = create<BotState>()(
         get().positions.forEach((pos) => {
           if ((pos.mint || mintOf(pos.coin)) === trade.mint) markToMarket(pos.id, priceUsd, 'pumpportal');
         });
-        // Keep the scanner list fresh too (volume / mcap for the feed).
+        // Keep the scanner list fresh too (volume / mcap for the feed). Trades of tokens that are not
+        // listed (smart-wallet account trades) do not rewrite the store.
+        if (!get().recentCoins.some((c) => mintOf(c) === trade.mint)) return;
         set((s) => ({
           recentCoins: s.recentCoins.map((c) =>
             mintOf(c) === trade.mint
@@ -549,7 +632,7 @@ export const useBotStore = create<BotState>()(
         const { positions } = get();
         if (positions.length === 0) return;
         // A token nobody trades sends no ticks, so time stops are also checked on this timer.
-        positions.filter((p) => p.timeStopMinutes).forEach((p) => markToMarket(p.id, p.currentPriceUsd, p.priceSource));
+        positions.filter((p) => p.timeStopMinutes || p.exitPlan).forEach((p) => markToMarket(p.id, p.currentPriceUsd, p.priceSource));
         // Bonding-curve tokens are priced by the stream; everything else via DexScreener.
         const targets = positions
           .filter((p) => !(p.priceSource === 'pumpportal' && p.lastPriceUpdateAt && Date.now() - p.lastPriceUpdateAt < 20_000))
@@ -782,6 +865,13 @@ export const useBotStore = create<BotState>()(
       }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as Partial<BotState>;
+        // Sessions saved before the convergence flow: auto trade is switched off once, so the new
+        // entry policy is only armed by pressing Start again (with the live confirmation).
+        const saved = p.settings as Partial<BotSettings> | undefined;
+        if (saved && saved.entryStrategy === undefined && saved.scannerAutoBuy) {
+          p.settings = { ...(saved as BotSettings), scannerAutoBuy: false };
+          strategyMigrated = true;
+        }
         return {
           ...current,
           ...p,
@@ -837,6 +927,12 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
   recordPriceTrail(pos.id, price);
   const { settings } = store;
 
+  // Convergence entries follow their own exit plan instead of TP / SL / profit lock / trailing.
+  if (pos.exitPlan) {
+    applyExitPlan(pos, price, source, { pnlUsd, pnlPercent, highPriceUsd, highAt });
+    return;
+  }
+
   // Profit lock: once the position has been up the trigger %, raise its stop above cost (amountUsd
   // includes the buy's fees) so a trade that was already winning cannot be closed at a loss.
   let { slPriceUsd, profitLocked } = pos;
@@ -877,6 +973,78 @@ function markToMarket(positionId: string, price: number, source: BotPosition['pr
       else exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS);
     })
     .catch(() => exitRetryAt.set(positionId, Date.now() + EXIT_RETRY_MS));
+}
+
+/**
+ * Marks a convergence position to market and runs its exit plan: staged take-profits (the stage
+ * is marked done before the sell so a tick during the sell cannot fire it twice, and unmarked if
+ * the sell fails), the moonbag trail, the stop and the time stop.
+ */
+function applyExitPlan(
+  pos: BotPosition,
+  price: number,
+  source: BotPosition['priceSource'],
+  mark: { pnlUsd: number; pnlPercent: number; highPriceUsd: number; highAt: number }
+) {
+  const plan = pos.exitPlan!;
+  const view = { buyPriceUsd: pos.buyPriceUsd, highPriceUsd: mark.highPriceUsd, boughtAt: pos.boughtAt, exitPlan: plan };
+  const levels = planLevels(view, price);
+  useBotStore.setState((s) => ({
+    positions: s.positions.map((p) =>
+      p.id === pos.id
+        ? { ...p, currentPriceUsd: price, pnlUsd: mark.pnlUsd, pnlPercent: mark.pnlPercent, highPriceUsd: mark.highPriceUsd, highAt: mark.highAt, ...levels, lastPriceUpdateAt: Date.now(), priceSource: source }
+        : p
+    ),
+  }));
+
+  const store = useBotStore.getState();
+  // A paper stage marked done whose sell never ran (the tab closed mid-sell): undo the mark.
+  if (!pos.isLive && plan.entryTokens) {
+    if (plan.tp1Done && !plan.tp2Done && pos.tokensBought > plan.entryTokens * 0.9) store.patchExitPlan(pos.id, { tp1Done: false });
+    else if (plan.tp2Done && pos.tokensBought > plan.entryTokens * ((100 - plan.tp1SellPct) / 100) * 0.9) store.patchExitPlan(pos.id, { tp2Done: false });
+  }
+  if (!store.settings.autoSell) return;
+  const d = planExit(view, price, Date.now());
+  if (d.action === 'none') return;
+  if ((exitRetryAt.get(pos.id) || 0) > Date.now()) return;
+
+  if (d.action === 'partial' && d.stage) {
+    const stage = d.stage;
+    const done: Partial<ExitPlan> = stage === 'tp1' ? { tp1Done: true } : { tp2Done: true };
+    const undo: Partial<ExitPlan> = stage === 'tp1' ? { tp1Done: false } : { tp2Done: false };
+    store.patchExitPlan(pos.id, done);
+    store.log('sell', `[EXIT PLAN] ${pos.coin.symbol} ${d.note}`, { coinSymbol: pos.coin.symbol });
+    store
+      .closePosition(pos.id, 'PARTIAL_TP', d.percent)
+      .then((r) => {
+        if (r.success) exitRetryAt.delete(pos.id);
+        else if (!pos.isLive) {
+          useBotStore.getState().patchExitPlan(pos.id, undo);
+          exitRetryAt.set(pos.id, Date.now() + EXIT_RETRY_MS);
+        } else {
+          // A live sell that reported failure may still land later; selling again could sell twice.
+          // The stage stays done and the rest of the plan (next target, stop, trail) keeps running.
+          useBotStore.getState().log('warning', `[EXIT PLAN] ${pos.coin.symbol}: the ${stage.toUpperCase()} sell failed (${r.message}). Not retried, to never sell twice; the rest of the plan stays active.`, {
+            coinSymbol: pos.coin.symbol,
+          });
+        }
+      })
+      .catch((err) => {
+        // An exception after the sell may already have sold: keep the stage done.
+        useBotStore.getState().log('warning', `[EXIT PLAN] ${pos.coin.symbol}: ${stage} sell error (${err?.message || err}); stage kept as done.`, { coinSymbol: pos.coin.symbol });
+        exitRetryAt.set(pos.id, Date.now() + EXIT_RETRY_MS);
+      });
+    return;
+  }
+
+  if (d.note) store.log(d.reason === 'TIME_STOP' ? 'info' : 'warning', `[EXIT PLAN] ${pos.coin.symbol}: ${d.note}`, { coinSymbol: pos.coin.symbol });
+  store
+    .closePosition(pos.id, d.reason || 'SL_HIT')
+    .then((r) => {
+      if (r.success) exitRetryAt.delete(pos.id);
+      else exitRetryAt.set(pos.id, Date.now() + EXIT_RETRY_MS);
+    })
+    .catch(() => exitRetryAt.set(pos.id, Date.now() + EXIT_RETRY_MS));
 }
 
 /** Closes the empty token account a full sell leaves behind, returning its rent to the signer. */
@@ -988,10 +1156,13 @@ export function isDailyLossReached(): boolean {
 async function openPosition(
   coin: CoinData,
   amountUsd: number,
-  opts: { tp: number; sl: number; timeStopMinutes?: number; decision?: AiDecision; reason: string }
-): Promise<{ success: boolean; message: string }> {
+  opts: { tp: number; sl: number; timeStopMinutes?: number; decision?: AiDecision; exitPlan?: ExitPlan; signalId?: string; maxSlippagePercent?: number; reason: string }
+): Promise<{ success: boolean; message: string; positionId?: string }> {
   const store = useBotStore.getState();
-  const { settings } = store;
+  const settings =
+    opts.maxSlippagePercent && opts.maxSlippagePercent > 0
+      ? { ...store.settings, slippagePercent: Math.min(store.settings.slippagePercent, opts.maxSlippagePercent) }
+      : store.settings;
   const live = !settings.paperTrading;
   const solPrice = store.solPriceUsd || SolPriceService.getCached();
   const priceUsd = coin.priceUsd || (coin.priceSol && solPrice ? coin.priceSol * solPrice : 0);
@@ -1005,6 +1176,8 @@ async function openPosition(
     aiDecision: opts.decision,
     priceSource: (coin.source as BotPosition['priceSource']) || undefined,
     timeStopMinutes: opts.timeStopMinutes,
+    exitPlan: opts.exitPlan,
+    signalId: opts.signalId,
   };
 
   if (!live) {
@@ -1062,6 +1235,12 @@ async function openPosition(
     store.refreshWalletBalance();
   }
 
+  if (position.exitPlan) {
+    // The plan sets the stop and the first target from the actual fill.
+    const exitPlan = { ...position.exitPlan, entryTokens: position.tokensBought };
+    position = { ...position, exitPlan, ...planLevels({ buyPriceUsd: position.buyPriceUsd, highPriceUsd: position.highPriceUsd, boughtAt: position.boughtAt, exitPlan }, position.buyPriceUsd) };
+  }
+
   useBotStore.setState((s) => ({
     walletBalance: live ? s.walletBalance : s.walletBalance - amountUsd,
     positions: [position, ...s.positions],
@@ -1076,7 +1255,11 @@ async function openPosition(
   if (settings.soundAlerts) AudioService.playSnipeSound();
   store.log(
     'buy',
-    `[${live ? 'LIVE' : 'PAPER'} BUY] ${position.tokensBought.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${coin.symbol} for $${position.amountUsd.toFixed(2)} @ $${position.buyPriceUsd.toPrecision(4)} | TP +${opts.tp}% SL -${opts.sl}% (${opts.reason})`,
+    `[${live ? 'LIVE' : 'PAPER'} BUY] ${position.tokensBought.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${coin.symbol} for $${position.amountUsd.toFixed(2)} @ $${position.buyPriceUsd.toPrecision(4)} | ${
+      position.exitPlan
+        ? `exit plan ${position.exitPlan.tp1Multiple}x/${position.exitPlan.tp2Multiple}x, SL -${position.exitPlan.stopLossPct}%`
+        : `TP +${opts.tp}% SL -${opts.sl}%`
+    } (${opts.reason})`,
     { coinSymbol: coin.symbol, chainId: coin.chainId, txSignature: position.buyTxSignature }
   );
 
@@ -1085,5 +1268,5 @@ async function openPosition(
     wsService.subscribeTokenTrades([mintOf(coin)]);
   }
 
-  return { success: true, message: `Bought ${coin.symbol} for $${position.amountUsd.toFixed(2)} (${live ? 'live' : 'paper'}).` };
+  return { success: true, message: `Bought ${coin.symbol} for $${position.amountUsd.toFixed(2)} (${live ? 'live' : 'paper'}).`, positionId: position.id };
 }

@@ -2,6 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { CoinAnalysis, CoinData } from '../types/coin';
 import { AiDecision, BotSettings, BotStats } from '../types/bot';
 import type { LaunchFacts } from './scanner.service';
+import type { ConvergenceAiVerdict } from '../types/convergence';
 
 /** Compact scanner signal sent to the gate (mirrors ScannerSignalBrief plus the gate facts). */
 export interface SignalForGate {
@@ -113,6 +114,37 @@ export const AIService = {
       const reason = err?.message || 'network error';
       // An expired login is not a passing failure either: nothing gets through until the user logs in.
       return { action: 'skip', confidence: 0, reason, source: 'heuristic', available: false, permanent: /log in again/i.test(reason) };
+    }
+  },
+
+  /**
+   * Stage 4 of the convergence flow. `available: false` means Claude could not be asked (no key,
+   * timeout, network) - not a verdict on the token.
+   */
+  async reviewConvergence(pkg: Record<string, unknown>, model?: string): Promise<ConvergenceAiVerdict> {
+    const at = Date.now();
+    try {
+      const data = await postJson<{ available?: boolean; configured?: boolean; permanent?: boolean; note?: string; model?: string; verdict?: Partial<ConvergenceAiVerdict> }>(
+        '/api/ai/convergence',
+        { package: pkg, model },
+        50_000
+      );
+      const v = data?.verdict || {};
+      const verdict = v.verdict === 'ENTRY' || v.verdict === 'WATCH' ? v.verdict : 'SKIP';
+      return {
+        verdict,
+        confidence: Number(v.confidence) || 0,
+        red_flags: v.red_flags || [],
+        alasan: v.alasan || [],
+        syarat_naik_ke_entry: v.syarat_naik_ke_entry || '',
+        data_kurang: v.data_kurang || [],
+        model: data?.model,
+        at,
+        available: data?.available !== false,
+        note: data?.configured === false ? 'not-configured' : data?.permanent ? `permanent: ${data.note}` : data?.note,
+      };
+    } catch (err: any) {
+      return { verdict: 'SKIP', confidence: 0, red_flags: [], alasan: [], syarat_naik_ke_entry: '', data_kurang: [], at, available: false, note: err?.message || 'network error' };
     }
   },
 

@@ -15,6 +15,7 @@ import { LiveMarketTicker } from '@/components/LiveMarketTicker';
 import { AutoTradePage } from '@/components/AutoTradePage';
 import { BotSettingsPanel } from '@/components/bot/BotSettingsPanel';
 import { useScannerStore } from '@/store/useScannerStore';
+import { useConvergenceStore } from '@/store/useConvergenceStore';
 import { LoginModal } from '@/components/LoginModal';
 import { useBotStore } from '@/store/useBotStore';
 import { useKeepAlive } from '@/hooks/useKeepAlive';
@@ -92,6 +93,8 @@ export default function DashboardPage() {
       useBotStore.getState().boot();
       // The scanner reads buy size and fees from the bot settings, so it starts after they load.
       useScannerStore.getState().init();
+      // Smart-wallet convergence flow: wallet list, monitor, journal (reads the bot settings too).
+      useConvergenceStore.getState().init();
     });
   }, []);
 

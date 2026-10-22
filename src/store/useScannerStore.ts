@@ -208,6 +208,9 @@ async function autoBuy(ready: ScanSignal[]) {
   const bot = useBotStore.getState();
   const { settings } = bot;
   if (!settings.scannerAutoBuy) return;
+  // The convergence flow is the only entry policy unless 'setups' or 'both' is picked: the scanner
+  // and launch watcher keep listing signals, they just do not buy.
+  if (settings.entryStrategy === 'convergence') return;
   if (bot.positions.length >= settings.maxPositions) return;
   if (settings.dailyLossLimitUsd > 0 && bot.getTodayRealizedPnl() <= -settings.dailyLossLimitUsd) return;
 
@@ -451,7 +454,17 @@ export const useScannerStore = create<ScannerState>()((set, get) => {
       useBotStore.getState().updateSettings({ scannerAutoBuy: true });
       set({ autoSince: Date.now() });
       get().setEnabled(true);
-      useBotStore.getState().log('info', '[AUTO TRADE] On: the scanner buys Ready signals it confirms (and Claude approves, when the AI gate is on).');
+      const strategy = useBotStore.getState().settings.entryStrategy;
+      useBotStore
+        .getState()
+        .log(
+          'info',
+          strategy === 'convergence'
+            ? '[AUTO TRADE] On: smart-wallet convergence signals that pass the safety gate, the momentum score and an AI ENTRY are bought and exited by the plan.'
+            : strategy === 'both'
+            ? '[AUTO TRADE] On: convergence signals (four gates) and Ready setup signals may both enter.'
+            : '[AUTO TRADE] On: the scanner buys Ready signals it confirms (and Claude approves, when the AI gate is on).'
+        );
     },
 
     stopAutoTrade: () => {

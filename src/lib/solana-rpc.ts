@@ -24,6 +24,10 @@ export const RPC_ALLOWED_METHODS = new Set([
   'sendTransaction',
   'getFeeForMessage',
   'getMinimumBalanceForRentExemption',
+  // Smart-wallet monitor and wallet verification (convergence flow): a wallet's newest
+  // signatures, then each new transaction to read the swap it made.
+  'getSignaturesForAddress',
+  'getTransaction',
 ]);
 
 /** publicnode rejects these without a personal token. */

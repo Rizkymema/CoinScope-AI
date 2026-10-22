@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:convergence": "npx --yes tsx@4 tests/convergence.rules.test.mts && npx --yes tsx@4 tests/convergence.e2e.test.mts && npx --yes tsx@4 tests/convergence.scenarios.test.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

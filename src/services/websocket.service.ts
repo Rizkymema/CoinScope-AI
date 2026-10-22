@@ -8,6 +8,8 @@ import { SolPriceService } from './solprice.service';
  *  - subscribeNewToken      -> every token created on Pump.fun / Bonk / LaunchLab
  *  - subscribeTokenTrade    -> every buy/sell for the mints we hold or watch (price ticks)
  *  - subscribeMigration     -> bonding-curve graduations
+ *  - subscribeAccountTrade  -> buys/sells made by tracked smart wallets (convergence monitor);
+ *                              best effort - the RPC poller in walletwatch.service is the source of truth
  * Docs: https://pumpportal.fun/data-api/real-time
  */
 const PUMPPORTAL_WS_URL = 'wss://pumpportal.fun/api/data';
@@ -35,6 +37,7 @@ export class PumpPortalWebSocket {
   private latencyMs = 0;
   private eventTimestamps: number[] = [];
   private tradeSubscriptions = new Set<string>();
+  private accountSubscriptions = new Set<string>();
   private wantNewTokens = false;
   private wantMigrations = false;
 
@@ -119,6 +122,7 @@ export class PumpPortalWebSocket {
           vTokensInBondingCurve: vTokens || undefined,
           pool: data.pool,
           traderPublicKey: data.traderPublicKey,
+          newTokenBalance: Number.isFinite(Number(data.newTokenBalance)) ? Number(data.newTokenBalance) : undefined,
           signature: data.signature,
           timestamp: Date.now(),
         };
@@ -189,6 +193,25 @@ export class PumpPortalWebSocket {
     this.send({ method: 'unsubscribeTokenTrade', keys: tracked });
   }
 
+  /** Trades made by specific wallets (smart-wallet monitor). */
+  subscribeAccountTrades(wallets: string[]) {
+    const fresh = wallets.filter((w) => w && !this.accountSubscriptions.has(w));
+    if (fresh.length === 0) return;
+    fresh.forEach((w) => this.accountSubscriptions.add(w));
+    this.send({ method: 'subscribeAccountTrade', keys: fresh });
+  }
+
+  unsubscribeAccountTrades(wallets: string[]) {
+    const tracked = wallets.filter((w) => this.accountSubscriptions.has(w));
+    if (tracked.length === 0) return;
+    tracked.forEach((w) => this.accountSubscriptions.delete(w));
+    this.send({ method: 'unsubscribeAccountTrade', keys: tracked });
+  }
+
+  getTrackedAccounts(): string[] {
+    return Array.from(this.accountSubscriptions);
+  }
+
   getTrackedMints(): string[] {
     return Array.from(this.tradeSubscriptions);
   }
@@ -241,6 +264,9 @@ export class PumpPortalWebSocket {
     if (this.wantMigrations) this.send({ method: 'subscribeMigration' });
     if (this.tradeSubscriptions.size > 0) {
       this.send({ method: 'subscribeTokenTrade', keys: Array.from(this.tradeSubscriptions) });
+    }
+    if (this.accountSubscriptions.size > 0) {
+      this.send({ method: 'subscribeAccountTrade', keys: Array.from(this.accountSubscriptions) });
     }
   }
 
